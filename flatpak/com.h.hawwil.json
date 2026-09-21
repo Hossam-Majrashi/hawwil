@@ -1,0 +1,38 @@
+{
+  "app-id": "com.h.hawwil",
+  "runtime": "org.freedesktop.Platform",
+  "runtime-version": "24.08",
+  "sdk": "org.freedesktop.Sdk",
+  "command": "hawwil",
+  "finish-args": [
+    "--share=ipc",
+    "--socket=fallback-x11",
+    "--socket=wayland",
+    "--socket=x11",
+    "--socket=pulseaudio",
+    "--device=dri",
+    "--filesystem=host",
+    "--filesystem=home"
+  ],
+  "runtime-extensions": {
+    "org.freedesktop.Platform.ffmpeg-full": {
+      "directory": "lib/ffmpeg",
+      "version": "24.08",
+      "add-ld-path": "."
+    }
+  },
+  "modules": [
+    {
+      "name": "hawwil",
+      "buildsystem": "simple",
+      "build-commands": [
+        "mkdir -p /app/bin /app/lib/hawwil /app/share/applications /app/share/icons/hicolor/512x512/apps /app/share/metainfo",
+        "cp -r * /app/lib/hawwil/",
+        "ln -s /app/lib/hawwil/hawwil /app/bin/hawwil",
+        "install -D -m 644 com.h.hawwil.desktop /app/share/applications/com.h.hawwil.desktop",
+        "install -D -m 644 com.h.hawwil.png /app/share/icons/hicolor/512x512/apps/com.h.hawwil.png",
+        "install -D -m 644 com.h.hawwil.metainfo.xml /app/share/metainfo/com.h.hawwil.metainfo.xml"
+      ]
+    }
+  ]
+}

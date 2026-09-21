@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Hawwil
+Name[ar]=حوّل
+Comment=Convert between MP3 and MP4 with embedded cover art
+Comment[ar]=حوّل بين MP3 و MP4 مع دعم كامل لصور الأغلفة المضمنة
+Exec=hawwil
+Icon=com.h.hawwil
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Video;AudioVideoEditing;Converter;Utility;
+Keywords=Audio;Video;MP3;MP4;Converter;Tags;CoverArt;ID3;
+StartupNotify=true

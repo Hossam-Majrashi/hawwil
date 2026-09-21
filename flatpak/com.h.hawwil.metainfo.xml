@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.h.hawwil</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Hawwil</name>
+  <name xml:lang="ar">حوّل</name>
+  <summary>MP3 and MP4 Converter with Embedded Cover Art</summary>
+  <summary xml:lang="ar">محول MP3 و MP4 مع دعم للأغلفة المدمجة</summary>
+  <description>
+    <p>Hawwil (حوّل) is a high-performance converter between MP3 audio and MP4 video with first-class cover art and metadata support.</p>
+    <p xml:lang="ar">تطبيق حوّل هو أداة متطورة للتحويل بين الملفات الصوتية MP3 وفيديوهات MP4 مع دعم متكامل لقراءة وحفظ صور الأغلفة والبيانات الوصفية.</p>
+  </description>
+  <launchable type="desktop-id">com.h.hawwil.desktop</launchable>
+  <provides>
+    <binary>hawwil</binary>
+  </provides>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="1.0.0" date="2026-09-22">
+      <description>
+        <p>Initial release of Hawwil converter for Linux.</p>
+      </description>
+    </release>
+  </releases>
+</component>
