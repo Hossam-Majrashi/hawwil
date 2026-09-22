@@ -51,7 +51,7 @@ class AppLocalizations {
       'screenHome': 'الرئيسية',
       'screenCreateProject': 'مشروع تحويل جديد',
       'screenProgress': 'قائمة التحويل',
-      'screenCoverEditor': 'محرر غلاف MP3',
+      'screenCoverEditor': 'محرر الأغلفة',
       'screenSettings': 'الإعدادات',
       'screenFfmpegSetup': 'تثبيت أداة FFmpeg',
 
@@ -59,8 +59,8 @@ class AppLocalizations {
       'aboutTitle': 'مرحباً بك في حوّل',
       'aboutFeature1': 'تحويل MP3 إلى MP4 مع اعتماد صورة الغلاف كإطار مرئي كامل.',
       'aboutFeature2': 'استخراج الصوت من MP4 إلى MP3 مع تضمين إطار الفيديو كغلاف.',
-      'aboutFeature3': 'محرر مخصص لصور أغلفة MP3 والبيانات الوصفية دون الحاجة لتحويل.',
-      'aboutFeature4': 'دعم المعالجة والتحويل المجمّع (Batch Conversion) بسرعة عالية.',
+      'aboutFeature3': 'محرر مخصص لصور الأغلفة والبيانات الوصفية لملفات MP3 و MP4 دون الحاجة لتحويل.',
+      'aboutFeature4': 'دعم المعالجة والتحويل المجمّع (Batch Conversion) بسرعة فائقة مع تسريع العتاد.',
       'getStarted': 'ابدأ الآن',
 
       // Language
@@ -77,8 +77,8 @@ class AppLocalizations {
       // Home
       'homeCreateProjectTitle': 'بدء مشروع جديد',
       'homeCreateProjectSub': 'تحويل ملف فردي أو دفعة ملفات بين MP3 و MP4',
-      'homeCoverEditorTitle': 'محرر أغلفة MP3',
-      'homeCoverEditorSub': 'عرض واستبدال أو إزالة صورة الغلاف وتعديل الوسوم مباشرة',
+      'homeCoverEditorTitle': 'محرر الأغلفة',
+      'homeCoverEditorSub': 'عرض واستبدال أو إزالة صورة الغلاف وتعديل الوسوم لملفات MP3 و MP4',
       'homeSettingsTitle': 'الإعدادات',
       'homeSettingsSub': 'تخصيص الدقة، معدل البت، مجلد الحفظ، المظهر واللغة',
       'quickStatus': 'حالة النظام',
@@ -129,8 +129,14 @@ class AppLocalizations {
       'startNewProject': 'بدء مشروع جديد',
 
       // Cover Editor
-      'coverEditorTitle': 'محرر أغلفة وتفاصيل MP3',
-      'pickMp3File': 'اختر ملف MP3 للتعديل',
+      'coverEditorTitle': 'محرر الأغلفة',
+      'pickMp3File': 'اختر ملف MP3 أو MP4 للتعديل',
+      'pickMp3': 'ملف MP3 (صوت)',
+      'pickMp4': 'ملف MP4 (فيديو)',
+      'selectMediaTypePrompt': 'اختر نوع الملف لتعديل الغلاف والبيانات',
+      'mp3Description': 'عرض وتعديل أو استبدال صورة الغلاف ووسوم ID3 الصوتية',
+      'mp4Description': 'عرض وتعديل أو استبدال بوستر الفيديو أو التقاط إطار',
+      'captureFrameFromVideo': 'التقاط إطار كغلاف',
       'currentCover': 'صورة الغلاف الحالية',
       'noCoverInFile': 'الملف لا يحتوي على صورة غلاف مدمجة',
       'uploadNewCover': 'اختيار صورة جديدة',
@@ -149,6 +155,8 @@ class AppLocalizations {
       'downloadCoverTooltip': 'تنزيل صورة الغلاف الحالية',
       'coverDownloaded': 'تم تنزيل صورة الغلاف بنجاح',
       'coverDownloadFailed': 'تعذر تنزيل صورة الغلاف',
+      'mp4CoverSaved': 'تم حفظ تعديلات غلاف وبيانات MP4 بنجاح',
+      'switchFile': 'تغيير الملف',
 
       // Settings
       'settingsTitle': 'الإعدادات العامة',
@@ -159,6 +167,14 @@ class AppLocalizations {
       'changeFolder': 'تغيير المجلد',
       'notSet': 'غير محدد (المجلد الافتراضي)',
       'languageAndAppearance': 'اللغة والمظهر',
+      'hardwareAcceleration': 'تسريع العتاد (كرت الشاشة والمعالج)',
+      'hardwareAccelerationDesc': 'استخدام كرت الشاشة (GPU) وتعدد أنوية المعالج لتسريع التحويل الفائق',
+      'hwAccelAuto': 'تلقائي (كرت الشاشة إن وجد)',
+      'hwAccelNvenc': 'NVIDIA NVENC (كرت الشاشة)',
+      'hwAccelVaapi': 'VAAPI (تسريع العتاد)',
+      'hwAccelCpuUltrafast': 'المعالج فائق السرعة (CPU Ultrafast)',
+      'gpuActive': 'تسريع كرت الشاشة نشط',
+      'cpuMultithreadActive': 'المعالج متعدد الأنوية نشط',
 
       // FFmpeg Setup (Desktop)
       'ffmpegSetupTitle': 'إعداد FFmpeg مطلوب',
@@ -210,7 +226,7 @@ class AppLocalizations {
       'screenHome': 'Home',
       'screenCreateProject': 'Create Project',
       'screenProgress': 'Conversion Queue',
-      'screenCoverEditor': 'MP3 Cover Art Editor',
+      'screenCoverEditor': 'Cover Art Editor',
       'screenSettings': 'Settings',
       'screenFfmpegSetup': 'FFmpeg Setup',
 
@@ -218,8 +234,8 @@ class AppLocalizations {
       'aboutTitle': 'Welcome to Hawwil',
       'aboutFeature1': 'Convert MP3 to MP4 using embedded cover art as a full-frame static video.',
       'aboutFeature2': 'Extract MP4 audio to MP3 and optionally embed video frames as cover art.',
-      'aboutFeature3': 'Standalone MP3 Cover Art Editor: view, replace, or remove cover art without conversion.',
-      'aboutFeature4': 'High-performance batch processing with real-time queue and progress tracking.',
+      'aboutFeature3': 'Standalone Cover Art Editor: view, replace, or remove cover art for MP3 and MP4 without conversion.',
+      'aboutFeature4': 'High-performance batch processing with real-time queue and hardware acceleration.',
       'getStarted': 'Get Started',
 
       // Language
@@ -237,7 +253,7 @@ class AppLocalizations {
       'homeCreateProjectTitle': 'Create Project',
       'homeCreateProjectSub': 'Convert single or batch audio & video files between MP3 and MP4',
       'homeCoverEditorTitle': 'Cover Art Editor',
-      'homeCoverEditorSub': 'Inspect, replace, or remove cover art and edit MP3 tags in-place',
+      'homeCoverEditorSub': 'Inspect, replace, or remove cover art and edit tags for MP3 and MP4 files',
       'homeSettingsTitle': 'Settings',
       'homeSettingsSub': 'Configure resolution, bitrates, default folder, language, and theme',
       'quickStatus': 'System Status',
@@ -288,8 +304,14 @@ class AppLocalizations {
       'startNewProject': 'Start New Project',
 
       // Cover Editor
-      'coverEditorTitle': 'MP3 Cover Art & Tag Editor',
-      'pickMp3File': 'Pick MP3 File to Edit',
+      'coverEditorTitle': 'Cover Art Editor',
+      'pickMp3File': 'Select MP3 or MP4 File to Edit',
+      'pickMp3': 'MP3 File (Audio)',
+      'pickMp4': 'MP4 File (Video)',
+      'selectMediaTypePrompt': 'Select file type to edit cover and metadata',
+      'mp3Description': 'Inspect, replace, or remove embedded cover art and audio ID3 tags',
+      'mp4Description': 'Change or remove video poster/cover or capture video frame',
+      'captureFrameFromVideo': 'Capture Frame as Cover',
       'currentCover': 'Current Cover Art',
       'noCoverInFile': 'No embedded cover art found in this file',
       'uploadNewCover': 'Choose New Image',
@@ -308,6 +330,8 @@ class AppLocalizations {
       'downloadCoverTooltip': 'Download current cover art',
       'coverDownloaded': 'Cover art downloaded successfully',
       'coverDownloadFailed': 'Failed to download cover art',
+      'mp4CoverSaved': 'MP4 cover and metadata updated successfully',
+      'switchFile': 'Switch File',
 
       // Settings
       'settingsTitle': 'General Settings',
@@ -318,6 +342,14 @@ class AppLocalizations {
       'changeFolder': 'Change Folder',
       'notSet': 'Not set (defaults to source directory)',
       'languageAndAppearance': 'Language & Appearance',
+      'hardwareAcceleration': 'Hardware Acceleration (GPU & CPU)',
+      'hardwareAccelerationDesc': 'Leverage GPU and multi-core CPU for maximum conversion speed',
+      'hwAccelAuto': 'Auto (GPU if available)',
+      'hwAccelNvenc': 'NVIDIA NVENC (GPU)',
+      'hwAccelVaapi': 'VAAPI (Hardware)',
+      'hwAccelCpuUltrafast': 'CPU Ultrafast',
+      'gpuActive': 'GPU Acceleration Active',
+      'cpuMultithreadActive': 'Multi-core CPU Active',
 
       // FFmpeg Setup (Desktop)
       'ffmpegSetupTitle': 'FFmpeg Setup Required',

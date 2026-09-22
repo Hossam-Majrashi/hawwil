@@ -183,6 +183,142 @@ class _WebCoverEditorScreenState extends State<WebCoverEditorScreen> {
     );
   }
 
+  bool _isMp4 = false;
+
+  Future<void> _pickMp4File() async {
+    final files = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['mp4', 'm4v', 'mov', 'mkv'],
+    );
+
+    if (files.isNotEmpty) {
+      final f = files.first;
+      if (!mounted) return;
+      setState(() {
+        _isMp4 = true;
+        _fileName = f.name;
+        _titleController.text = f.name.replaceAll(RegExp(r'\.(mp4|m4v|mov|mkv)$'), '');
+        _coverBytes = null;
+        _coverWidth = null;
+        _coverHeight = null;
+      });
+      WidgetsBinding.instance.scheduleFrame();
+    }
+  }
+
+  Widget _buildEmptyState(AppLocalizations l10n, ThemeData theme, bool isDark) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 36.0, vertical: 44.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF38BDF8).withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.photo_library_outlined, size: 56, color: Color(0xFF38BDF8)),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              l10n.tr('coverEditorTitle'),
+              style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              l10n.tr('selectMediaTypePrompt'),
+              style: const TextStyle(color: Colors.grey, fontSize: 13),
+            ),
+            const SizedBox(height: 32),
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: _pickMp3File,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF282B30) : Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isDark ? const Color(0xFF3F444D) : Colors.grey.shade300,
+                        ),
+                      ),
+                      child: Column(
+                        children: [
+                          const Icon(Icons.music_note_rounded, size: 36, color: Color(0xFF38BDF8)),
+                          const SizedBox(height: 12),
+                          Text(
+                            l10n.tr('pickMp3'),
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            l10n.tr('mp3Description'),
+                            style: const TextStyle(color: Colors.grey, fontSize: 11),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton(
+                            onPressed: _pickMp3File,
+                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF38BDF8), foregroundColor: Colors.white),
+                            child: Text(l10n.tr('choose')),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: InkWell(
+                    onTap: _pickMp4File,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF282B30) : Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isDark ? const Color(0xFF3F444D) : Colors.grey.shade300,
+                        ),
+                      ),
+                      child: Column(
+                        children: [
+                          const Icon(Icons.movie_rounded, size: 36, color: Color(0xFF10B981)),
+                          const SizedBox(height: 12),
+                          Text(
+                            l10n.tr('pickMp4'),
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            l10n.tr('mp4Description'),
+                            style: const TextStyle(color: Colors.grey, fontSize: 11),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton(
+                            onPressed: _pickMp4File,
+                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981), foregroundColor: Colors.white),
+                            child: Text(l10n.tr('choose')),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -203,28 +339,7 @@ class _WebCoverEditorScreenState extends State<WebCoverEditorScreen> {
           child: Padding(
             padding: const EdgeInsets.all(32.0),
             child: _fileName == null
-                ? Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(40.0),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.photo_filter_rounded, size: 64, color: Color(0xFF10B981)),
-                          const SizedBox(height: 16),
-                          Text(
-                            l10n.tr('coverEditorTitle'),
-                            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 24),
-                          ElevatedButton.icon(
-                            onPressed: _pickMp3File,
-                            icon: const Icon(Icons.folder_open_rounded),
-                            label: Text(l10n.tr('pickMp3File')),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
+                ? _buildEmptyState(l10n, theme, isDark)
                 : Card(
                     child: Padding(
                       padding: const EdgeInsets.all(28.0),
@@ -347,9 +462,34 @@ class _WebCoverEditorScreenState extends State<WebCoverEditorScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                Text(
-                                  _fileName!,
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: _isMp4
+                                            ? const Color(0xFF10B981).withOpacity(0.15)
+                                            : const Color(0xFF38BDF8).withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        _isMp4 ? 'MP4' : 'MP3',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                          color: _isMp4 ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        _fileName!,
+                                        style: const TextStyle(fontWeight: FontWeight.bold),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 const SizedBox(height: 16),
                                 TextField(

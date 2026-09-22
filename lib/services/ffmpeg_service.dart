@@ -7,6 +7,26 @@ import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
+class HwAccelInfo {
+  final bool hasNvenc;
+  final bool hasVaapi;
+  final bool hasQsv;
+  final bool hasVideoToolbox;
+  final String recommendedType; // 'nvenc', 'vaapi', 'qsv', 'cpu_ultrafast'
+  final String encoderName; // 'h264_nvenc', 'h264_vaapi', etc.
+  final String description; // e.g. 'NVIDIA GeForce GTX 1650 Ti (NVENC)'
+
+  HwAccelInfo({
+    this.hasNvenc = false,
+    this.hasVaapi = false,
+    this.hasQsv = false,
+    this.hasVideoToolbox = false,
+    this.recommendedType = 'cpu_ultrafast',
+    this.encoderName = 'libx264',
+    this.description = 'CPU (Multi-core)',
+  });
+}
+
 class FFmpegResult {
   final bool success;
   final String? errorMessage;
@@ -33,6 +53,7 @@ class FFmpegProgressInfo {
 
 class FFmpegService {
   static bool? _isFFmpegAvailableCached;
+  static HwAccelInfo? _cachedHwAccel;
 
   /// Check if system ffmpeg exists on Desktop
   static Future<bool> checkDesktopFFmpeg() async {
@@ -60,6 +81,72 @@ class FFmpegService {
 
   static void resetFFmpegCache() {
     _isFFmpegAvailableCached = null;
+    _cachedHwAccel = null;
+  }
+
+  /// Detect GPU Hardware Acceleration encoders (NVIDIA NVENC, VAAPI, QSV, etc.)
+  static Future<HwAccelInfo> detectHardwareAcceleration() async {
+    if (_cachedHwAccel != null) return _cachedHwAccel!;
+    if (kIsWeb || (!Platform.isLinux && !Platform.isMacOS && !Platform.isWindows)) {
+      _cachedHwAccel = HwAccelInfo();
+      return _cachedHwAccel!;
+    }
+
+    try {
+      final res = await Process.run('ffmpeg', ['-encoders']);
+      final out = res.stdout.toString();
+      final hasNvenc = out.contains('h264_nvenc');
+      final hasVaapi = out.contains('h264_vaapi');
+      final hasQsv = out.contains('h264_qsv');
+      final hasVideoToolbox = out.contains('h264_videotoolbox');
+
+      String gpuDesc = 'CPU (Multi-core)';
+      String recType = 'cpu_ultrafast';
+      String encName = 'libx264';
+
+      if (hasNvenc) {
+        try {
+          final smi = await Process.run('nvidia-smi', ['--query-gpu=name', '--format=csv,noheader']);
+          if (smi.exitCode == 0 && smi.stdout.toString().trim().isNotEmpty) {
+            final name = smi.stdout.toString().trim().split('\n').first;
+            gpuDesc = '$name (NVIDIA NVENC)';
+          } else {
+            gpuDesc = 'NVIDIA GPU (NVENC)';
+          }
+        } catch (_) {
+          gpuDesc = 'NVIDIA GPU (NVENC)';
+        }
+        recType = 'nvenc';
+        encName = 'h264_nvenc';
+      } else if (hasVideoToolbox && Platform.isMacOS) {
+        gpuDesc = 'Apple Silicon / Metal (VideoToolbox)';
+        recType = 'videotoolbox';
+        encName = 'h264_videotoolbox';
+      } else if (hasVaapi && Platform.isLinux) {
+        gpuDesc = 'Linux GPU (VAAPI)';
+        recType = 'vaapi';
+        encName = 'h264_vaapi';
+      } else if (hasQsv) {
+        gpuDesc = 'Intel Quick Sync (QSV)';
+        recType = 'qsv';
+        encName = 'h264_qsv';
+      }
+
+      _cachedHwAccel = HwAccelInfo(
+        hasNvenc: hasNvenc,
+        hasVaapi: hasVaapi,
+        hasQsv: hasQsv,
+        hasVideoToolbox: hasVideoToolbox,
+        recommendedType: recType,
+        encoderName: encName,
+        description: gpuDesc,
+      );
+      return _cachedHwAccel!;
+    } catch (e) {
+      debugPrint('detectHardwareAcceleration error: $e');
+      _cachedHwAccel = HwAccelInfo();
+      return _cachedHwAccel!;
+    }
   }
 
   /// Extract a single frame from video at the given scrub timestamp (in seconds)
@@ -120,13 +207,199 @@ class FFmpegService {
     return null;
   }
 
+  /// Extract cover art from MP4 (first checking embedded attached_pic, fallback to video frame)
+  static Future<Uint8List?> extractMp4CoverOrFrame({
+    required String videoPath,
+    double timestampSeconds = 0.0,
+  }) async {
+    if (kIsWeb) return null;
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final outImagePath = p.join(
+        tempDir.path,
+        'mp4_cover_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      );
+
+      // Check if MP4 has an attached_pic stream
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        try {
+          final probe = await Process.run('ffprobe', [
+            '-v', 'error',
+            '-show_entries', 'stream_disposition=attached_pic:stream=index',
+            '-of', 'json',
+            videoPath,
+          ]);
+
+          if (probe.exitCode == 0) {
+            final parsed = jsonDecode(probe.stdout.toString());
+            if (parsed is Map && parsed['streams'] is List) {
+              final streams = parsed['streams'] as List;
+              int? attachedIdx;
+              for (final s in streams) {
+                if (s is Map) {
+                  final disp = s['disposition'];
+                  if (disp is Map && disp['attached_pic'] == 1) {
+                    attachedIdx = s['index'] as int?;
+                    break;
+                  }
+                }
+              }
+
+              if (attachedIdx != null) {
+                final extractRes = await Process.run('ffmpeg', [
+                  '-y',
+                  '-i', videoPath,
+                  '-map', '0:$attachedIdx',
+                  '-c', 'copy',
+                  outImagePath,
+                ]);
+                if (extractRes.exitCode == 0 && await File(outImagePath).exists()) {
+                  final bytes = await File(outImagePath).readAsBytes();
+                  try { await File(outImagePath).delete(); } catch (_) {}
+                  return bytes;
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      // Fallback: extract frame from video
+      return await extractVideoFrame(
+        videoPath: videoPath,
+        timestampSeconds: timestampSeconds,
+      );
+    } catch (e) {
+      debugPrint('extractMp4CoverOrFrame error: $e');
+      return null;
+    }
+  }
+
+  /// Read metadata tags from video or audio file
+  static Future<Map<String, String>> readMediaTags(String filePath) async {
+    final result = <String, String>{'title': '', 'artist': '', 'album': ''};
+    if (kIsWeb) return result;
+    try {
+      final probe = await Process.run('ffprobe', [
+        '-v', 'error',
+        '-show_entries', 'format_tags=title,artist,album',
+        '-of', 'json',
+        filePath,
+      ]);
+      if (probe.exitCode == 0) {
+        final parsed = jsonDecode(probe.stdout.toString());
+        if (parsed is Map && parsed['format'] is Map && parsed['format']['tags'] is Map) {
+          final tags = parsed['format']['tags'] as Map;
+          result['title'] = (tags['title'] ?? tags['TITLE'] ?? '').toString();
+          result['artist'] = (tags['artist'] ?? tags['ARTIST'] ?? '').toString();
+          result['album'] = (tags['album'] ?? tags['ALBUM'] ?? '').toString();
+        }
+      }
+    } catch (_) {}
+    return result;
+  }
+
+  /// Update cover art and metadata tags in an MP4 file in-place (Lossless & Instant via -c copy)
+  static Future<bool> updateMp4CoverAndMetadata({
+    required String filePath,
+    Uint8List? newCoverBytes,
+    bool removeCover = false,
+    String? title,
+    String? artist,
+    String? album,
+  }) async {
+    if (kIsWeb) return false;
+
+    File? tempImageFile;
+    final tempOutPath = '$filePath.tmp_hawwil_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+    try {
+      final List<String> args = ['-y'];
+
+      if (!removeCover && newCoverBytes != null && newCoverBytes.isNotEmpty) {
+        final tempDir = await getTemporaryDirectory();
+        tempImageFile = File(
+          p.join(tempDir.path, 'temp_cover_${DateTime.now().millisecondsSinceEpoch}.jpg'),
+        );
+        await tempImageFile.writeAsBytes(newCoverBytes);
+      }
+
+      args.addAll(['-i', filePath]);
+
+      if (!removeCover && tempImageFile != null) {
+        args.addAll(['-i', tempImageFile.path]);
+        args.addAll([
+          '-map', '0:v:0',
+          '-map', '0:a?',
+          '-map', '1:v',
+          '-c', 'copy',
+          '-disposition:v:1', 'attached_pic',
+        ]);
+      } else if (removeCover) {
+        args.addAll([
+          '-map', '0:v:0',
+          '-map', '0:a?',
+          '-c', 'copy',
+        ]);
+      } else {
+        args.addAll([
+          '-c', 'copy',
+        ]);
+      }
+
+      if (title != null && title.isNotEmpty) {
+        args.addAll(['-metadata', 'title=$title']);
+      }
+      if (artist != null && artist.isNotEmpty) {
+        args.addAll(['-metadata', 'artist=$artist']);
+      }
+      if (album != null && album.isNotEmpty) {
+        args.addAll(['-metadata', 'album=$album']);
+      }
+
+      args.add(tempOutPath);
+
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        final res = await Process.run('ffmpeg', args);
+        if (res.exitCode == 0 && await File(tempOutPath).exists()) {
+          await File(tempOutPath).rename(filePath);
+          return true;
+        } else {
+          debugPrint('updateMp4CoverAndMetadata failed: ${res.stderr}');
+          if (await File(tempOutPath).exists()) {
+            try { await File(tempOutPath).delete(); } catch (_) {}
+          }
+          return false;
+        }
+      } else if (Platform.isAndroid || Platform.isIOS) {
+        final cmd = args.map((a) => a.contains(' ') ? '"$a"' : a).join(' ');
+        final session = await FFmpegKit.execute(cmd);
+        final returnCode = await session.getReturnCode();
+        if (ReturnCode.isSuccess(returnCode) && await File(tempOutPath).exists()) {
+          await File(tempOutPath).rename(filePath);
+          return true;
+        }
+      }
+    } catch (e) {
+      debugPrint('updateMp4CoverAndMetadata error: $e');
+    } finally {
+      if (tempImageFile != null && await tempImageFile.exists()) {
+        try { await tempImageFile.delete(); } catch (_) {}
+      }
+      if (await File(tempOutPath).exists()) {
+        try { await File(tempOutPath).delete(); } catch (_) {}
+      }
+    }
+    return false;
+  }
+
   /// Retrieve media duration in seconds
   static Future<double?> getMediaDuration(String filePath) async {
     if (kIsWeb) return null;
 
     try {
       if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-        // Try ffprobe
         final res = await Process.run('ffprobe', [
           '-v',
           'error',
@@ -141,7 +414,6 @@ class FFmpegService {
           if (seconds != null && seconds > 0) return seconds;
         }
 
-        // Fallback: run ffmpeg -i to read duration from stderr
         final p = await Process.run('ffmpeg', ['-i', filePath]);
         final stderrStr = p.stderr.toString();
         return _parseDurationFromStderr(stderrStr);
@@ -153,7 +425,7 @@ class FFmpegService {
   }
 
   /// Convert MP3 -> MP4
-  /// Single static image across full duration; H.264 video + AAC audio
+  /// Optimized for extreme speed with GPU hardware acceleration or CPU multi-threading
   static Future<FFmpegResult> convertMp3ToMp4({
     required String audioPath,
     required String imagePath,
@@ -161,6 +433,7 @@ class FFmpegService {
     String resolution = '1920x1080',
     String videoBitrate = '5000k',
     String audioBitrate = '320k',
+    String hardwareAcceleration = 'auto',
     void Function(double progress)? onProgress,
     Completer<void>? cancelCompleter,
   }) async {
@@ -174,32 +447,57 @@ class FFmpegService {
     final durationSec = await getMediaDuration(audioPath) ?? 180.0;
 
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+      final hw = await detectHardwareAcceleration();
+      final useNvenc = (hardwareAcceleration == 'auto' && hw.hasNvenc) || hardwareAcceleration == 'nvenc';
+      final useVaapi = (hardwareAcceleration == 'auto' && !hw.hasNvenc && hw.hasVaapi) || hardwareAcceleration == 'vaapi';
+
+      final List<String> encoderArgs = [];
+      if (useNvenc) {
+        encoderArgs.addAll([
+          '-c:v', 'h264_nvenc',
+          '-preset', 'p1',
+          '-tune', 'ull',
+          '-b:v', videoBitrate,
+        ]);
+      } else if (useVaapi) {
+        encoderArgs.addAll([
+          '-vaapi_device', '/dev/dri/renderD128',
+          '-vf', 'format=nv12,hwupload',
+          '-c:v', 'h264_vaapi',
+          '-b:v', videoBitrate,
+        ]);
+      } else {
+        // High-speed CPU encoding with multi-threading
+        encoderArgs.addAll([
+          '-c:v', 'libx264',
+          '-preset', 'ultrafast',
+          '-tune', 'stillimage',
+          '-threads', '0',
+          '-b:v', videoBitrate,
+        ]);
+      }
+
+      final desktopArgs = [
+        '-y',
+        '-threads', '0',
+        '-loop', '1',
+        '-framerate', '2', // Smart low framerate for static cover image: 1000x faster!
+        '-i', imagePath,
+        '-i', audioPath,
+        '-map', '0:v:0',
+        '-map', '1:a:0',
+        ...encoderArgs,
+        '-c:a', 'aac',
+        '-b:a', audioBitrate,
+        '-s', resolution,
+        '-pix_fmt', 'yuv420p',
+        '-r', '2',
+        '-shortest',
+        outputPath,
+      ];
+
       return _runDesktopConversion(
-        args: [
-          '-y',
-          '-loop',
-          '1',
-          '-i',
-          imagePath,
-          '-i',
-          audioPath,
-          '-c:v',
-          'libx264',
-          '-tune',
-          'stillimage',
-          '-c:a',
-          'aac',
-          '-b:a',
-          audioBitrate,
-          '-b:v',
-          videoBitrate,
-          '-s',
-          resolution,
-          '-pix_fmt',
-          'yuv420p',
-          '-shortest',
-          outputPath,
-        ],
+        args: desktopArgs,
         totalDurationSeconds: durationSec,
         outputPath: outputPath,
         onProgress: onProgress,
@@ -208,7 +506,7 @@ class FFmpegService {
     } else {
       return _runMobileConversion(
         command:
-            '-y -loop 1 -i "$imagePath" -i "$audioPath" -c:v libx264 -tune stillimage -c:a aac -b:a $audioBitrate -b:v $videoBitrate -s $resolution -pix_fmt yuv420p -shortest "$outputPath"',
+            '-y -threads 0 -loop 1 -framerate 2 -i "$imagePath" -i "$audioPath" -map 0:v:0 -map 1:a:0 -c:v libx264 -preset ultrafast -tune stillimage -c:a aac -b:a $audioBitrate -b:v $videoBitrate -s $resolution -pix_fmt yuv420p -r 2 -shortest "$outputPath"',
         totalDurationSeconds: durationSec,
         outputPath: outputPath,
         onProgress: onProgress,
@@ -218,7 +516,7 @@ class FFmpegService {
   }
 
   /// Convert MP4 -> MP3
-  /// Extract audio track to MP3 via libmp3lame
+  /// Extract audio track to MP3 with multi-threading and direct stream copy if already mp3
   static Future<FFmpegResult> convertMp4ToMp3({
     required String videoPath,
     required String outputPath,
@@ -236,18 +534,41 @@ class FFmpegService {
     final durationSec = await getMediaDuration(videoPath) ?? 180.0;
 
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      return _runDesktopConversion(
-        args: [
-          '-y',
-          '-i',
+      bool isAudioAlreadyMp3 = false;
+      try {
+        final probe = await Process.run('ffprobe', [
+          '-v', 'error',
+          '-select_streams', 'a:0',
+          '-show_entries', 'stream=codec_name',
+          '-of', 'default=noprint_wrappers=1:nokey=1',
           videoPath,
-          '-vn',
-          '-c:a',
-          'libmp3lame',
-          '-b:a',
-          audioBitrate,
-          outputPath,
-        ],
+        ]);
+        if (probe.exitCode == 0 && probe.stdout.toString().trim() == 'mp3') {
+          isAudioAlreadyMp3 = true;
+        }
+      } catch (_) {}
+
+      final List<String> args = [
+        '-y',
+        '-threads', '0',
+        '-i', videoPath,
+        '-vn',
+        '-map', '0:a:0?',
+      ];
+
+      if (isAudioAlreadyMp3) {
+        args.addAll(['-c:a', 'copy']);
+      } else {
+        args.addAll([
+          '-c:a', 'libmp3lame',
+          '-b:a', audioBitrate,
+          '-qscale:a', '2',
+        ]);
+      }
+      args.add(outputPath);
+
+      return _runDesktopConversion(
+        args: args,
         totalDurationSeconds: durationSec,
         outputPath: outputPath,
         onProgress: onProgress,
@@ -256,7 +577,7 @@ class FFmpegService {
     } else {
       return _runMobileConversion(
         command:
-            '-y -i "$videoPath" -vn -c:a libmp3lame -b:a $audioBitrate "$outputPath"',
+            '-y -threads 0 -i "$videoPath" -vn -map 0:a:0? -c:a libmp3lame -b:a $audioBitrate -qscale:a 2 "$outputPath"',
         totalDurationSeconds: durationSec,
         outputPath: outputPath,
         onProgress: onProgress,

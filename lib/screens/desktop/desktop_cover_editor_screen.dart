@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import '../../l10n/app_localizations.dart';
 import '../../services/taglib_service.dart';
+import '../../services/ffmpeg_service.dart';
 import '../../services/cover_download_service.dart';
 
 class DesktopCoverEditorScreen extends StatefulWidget {
@@ -24,6 +25,7 @@ class DesktopCoverEditorScreen extends StatefulWidget {
 class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
   String? _filePath;
   String? _fileName;
+  bool _isMp4 = false;
   Uint8List? _coverBytes;
   bool _coverRemoved = false;
   bool _isLoading = false;
@@ -32,6 +34,9 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
   int? _coverWidth;
   int? _coverHeight;
   BoxFit _coverFit = BoxFit.contain;
+
+  double _videoScrubSeconds = 0.0;
+  double _videoDurationSeconds = 0.0;
 
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _artistController = TextEditingController();
@@ -77,15 +82,30 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
     }
   }
 
+  Future<void> _pickMp4File() async {
+    final files = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['mp4', 'm4v', 'mov', 'mkv'],
+    );
+
+    if (files.isNotEmpty && files.first.path != null) {
+      final path = files.first.path!;
+      await _loadMp4(path);
+    }
+  }
+
   Future<void> _loadMp3(String path) async {
     if (!mounted) return;
     setState(() {
       _isLoading = true;
+      _isMp4 = false;
       _filePath = path;
       _fileName = p.basename(path);
       _coverRemoved = false;
       _coverWidth = null;
       _coverHeight = null;
+      _videoScrubSeconds = 0.0;
+      _videoDurationSeconds = 0.0;
     });
     WidgetsBinding.instance.scheduleFrame();
 
@@ -107,6 +127,68 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
 
     if (bytes != null && bytes.isNotEmpty) {
       await _decodeCoverDimensions(bytes);
+    }
+  }
+
+  Future<void> _loadMp4(String path) async {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+      _isMp4 = true;
+      _filePath = path;
+      _fileName = p.basename(path);
+      _coverRemoved = false;
+      _coverWidth = null;
+      _coverHeight = null;
+      _videoScrubSeconds = 0.0;
+    });
+    WidgetsBinding.instance.scheduleFrame();
+
+    final dur = await FFmpegService.getMediaDuration(path) ?? 0.0;
+    _videoDurationSeconds = dur;
+    _duration = Duration(milliseconds: (dur * 1000).toInt());
+
+    final tags = await FFmpegService.readMediaTags(path);
+    final coverBytes = await FFmpegService.extractMp4CoverOrFrame(
+      videoPath: path,
+      timestampSeconds: 0.0,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _isLoading = false;
+      _coverBytes = coverBytes;
+      _titleController.text = tags['title']?.isNotEmpty == true
+          ? tags['title']!
+          : p.basenameWithoutExtension(path);
+      _artistController.text = tags['artist'] ?? '';
+      _albumController.text = tags['album'] ?? '';
+      _bitrate = 0;
+    });
+    WidgetsBinding.instance.scheduleFrame();
+
+    if (coverBytes != null && coverBytes.isNotEmpty) {
+      await _decodeCoverDimensions(coverBytes);
+    }
+  }
+
+  Future<void> _scrubFrame(double seconds) async {
+    if (_filePath == null || !_isMp4) return;
+    setState(() {
+      _videoScrubSeconds = seconds;
+    });
+
+    final frame = await FFmpegService.extractVideoFrame(
+      videoPath: _filePath!,
+      timestampSeconds: seconds,
+    );
+
+    if (frame != null && mounted) {
+      setState(() {
+        _coverBytes = frame;
+        _coverRemoved = false;
+      });
+      await _decodeCoverDimensions(frame);
     }
   }
 
@@ -217,14 +299,26 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
 
     setState(() => _isSaving = true);
 
-    final success = await TagLibService.updateCoverAndMetadata(
-      filePath: _filePath!,
-      newCoverBytes: _coverBytes,
-      removeCover: _coverRemoved,
-      title: _titleController.text.trim(),
-      artist: _artistController.text.trim(),
-      album: _albumController.text.trim(),
-    );
+    bool success = false;
+    if (_isMp4) {
+      success = await FFmpegService.updateMp4CoverAndMetadata(
+        filePath: _filePath!,
+        newCoverBytes: _coverBytes,
+        removeCover: _coverRemoved,
+        title: _titleController.text.trim(),
+        artist: _artistController.text.trim(),
+        album: _albumController.text.trim(),
+      );
+    } else {
+      success = await TagLibService.updateCoverAndMetadata(
+        filePath: _filePath!,
+        newCoverBytes: _coverBytes,
+        removeCover: _coverRemoved,
+        title: _titleController.text.trim(),
+        artist: _artistController.text.trim(),
+        album: _albumController.text.trim(),
+      );
+    }
 
     setState(() => _isSaving = false);
 
@@ -232,7 +326,9 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            success ? l10n.tr('saved') : l10n.tr('error'),
+            success
+                ? (_isMp4 ? l10n.tr('mp4CoverSaved') : l10n.tr('saved'))
+                : l10n.tr('error'),
           ),
           backgroundColor: success ? const Color(0xFF10B981) : Colors.redAccent,
         ),
@@ -254,7 +350,40 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
           onPressed: widget.onBack,
         ),
         actions: [
-          if (_filePath != null)
+          if (_filePath != null) ...[
+            PopupMenuButton<String>(
+              tooltip: l10n.tr('switchFile'),
+              icon: const Icon(Icons.folder_open_rounded),
+              onSelected: (val) {
+                if (val == 'mp3') {
+                  _pickMp3File();
+                } else if (val == 'mp4') {
+                  _pickMp4File();
+                }
+              },
+              itemBuilder: (ctx) => [
+                PopupMenuItem(
+                  value: 'mp3',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.music_note_rounded, color: Color(0xFF38BDF8), size: 20),
+                      const SizedBox(width: 8),
+                      Text(l10n.tr('pickMp3')),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'mp4',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.movie_rounded, color: Color(0xFF10B981), size: 20),
+                      const SizedBox(width: 8),
+                      Text(l10n.tr('pickMp4')),
+                    ],
+                  ),
+                ),
+              ],
+            ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: ElevatedButton.icon(
@@ -269,13 +398,14 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
                 label: Text(l10n.tr('saveChanges')),
               ),
             ),
+          ],
         ],
       ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1000),
           child: _filePath == null
-              ? _buildEmptyState(l10n, theme)
+              ? _buildEmptyState(l10n, theme, isDark)
               : _isLoading
                   ? const Center(child: CircularProgressIndicator())
                   : _buildEditorContent(l10n, theme, isDark),
@@ -284,43 +414,168 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
     );
   }
 
-  Widget _buildEmptyState(AppLocalizations l10n, ThemeData theme) {
+  Widget _buildEmptyState(AppLocalizations l10n, ThemeData theme, bool isDark) {
     return Center(
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(48.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.audio_file_outlined,
-                size: 72,
-                color: Color(0xFF38BDF8),
-              ),
-              const SizedBox(height: 24),
-              Text(
-                l10n.tr('coverEditorTitle'),
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(32),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40.0, vertical: 48.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF38BDF8).withOpacity(0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.photo_library_outlined,
+                    size: 64,
+                    color: Color(0xFF38BDF8),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                l10n.tr('homeCoverEditorSub'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey),
-              ),
-              const SizedBox(height: 32),
-              ElevatedButton.icon(
-                onPressed: _pickMp3File,
-                icon: const Icon(Icons.folder_open_rounded),
-                label: Text(l10n.tr('pickMp3File')),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
+                const SizedBox(height: 24),
+                Text(
+                  l10n.tr('coverEditorTitle'),
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 8),
+                Text(
+                  l10n.tr('selectMediaTypePrompt'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.grey, fontSize: 14),
+                ),
+                const SizedBox(height: 36),
+
+                // Choice Cards: MP3 or MP4
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isWide = constraints.maxWidth > 550;
+                    if (isWide) {
+                      return Row(
+                        children: [
+                          Expanded(
+                            child: _buildChoiceCard(
+                              title: l10n.tr('pickMp3'),
+                              subtitle: l10n.tr('mp3Description'),
+                              icon: Icons.music_note_rounded,
+                              color: const Color(0xFF38BDF8),
+                              onTap: _pickMp3File,
+                              isDark: isDark,
+                              theme: theme,
+                            ),
+                          ),
+                          const SizedBox(width: 24),
+                          Expanded(
+                            child: _buildChoiceCard(
+                              title: l10n.tr('pickMp4'),
+                              subtitle: l10n.tr('mp4Description'),
+                              icon: Icons.movie_rounded,
+                              color: const Color(0xFF10B981),
+                              onTap: _pickMp4File,
+                              isDark: isDark,
+                              theme: theme,
+                            ),
+                          ),
+                        ],
+                      );
+                    } else {
+                      return Column(
+                        children: [
+                          _buildChoiceCard(
+                            title: l10n.tr('pickMp3'),
+                            subtitle: l10n.tr('mp3Description'),
+                            icon: Icons.music_note_rounded,
+                            color: const Color(0xFF38BDF8),
+                            onTap: _pickMp3File,
+                            isDark: isDark,
+                            theme: theme,
+                          ),
+                          const SizedBox(height: 16),
+                          _buildChoiceCard(
+                            title: l10n.tr('pickMp4'),
+                            subtitle: l10n.tr('mp4Description'),
+                            icon: Icons.movie_rounded,
+                            color: const Color(0xFF10B981),
+                            onTap: _pickMp4File,
+                            isDark: isDark,
+                            theme: theme,
+                          ),
+                        ],
+                      );
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChoiceCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+    required bool isDark,
+    required ThemeData theme,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF282B30) : Colors.grey.shade50,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isDark ? const Color(0xFF3F444D) : Colors.grey.shade300,
+            width: 1.5,
+          ),
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 36, color: color),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              subtitle,
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: onTap,
+              icon: const Icon(Icons.file_open_outlined, size: 16),
+              label: Text(title),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: color,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -511,10 +766,42 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
-            ] else ...[
+            ],
+
+            // Video Scrub Controls (Only for MP4)
+            if (_isMp4 && _videoDurationSeconds > 0) ...[
+              const Divider(height: 24),
+              Row(
+                children: [
+                  const Icon(Icons.camera_alt_outlined, size: 16, color: Color(0xFF10B981)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      l10n.tr('captureFrameFromVideo'),
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Text(
+                    '${_videoScrubSeconds.toStringAsFixed(1)}s',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              Slider(
+                value: _videoScrubSeconds.clamp(0.0, _videoDurationSeconds),
+                min: 0.0,
+                max: _videoDurationSeconds > 0 ? _videoDurationSeconds : 60.0,
+                onChanged: (val) {
+                  setState(() => _videoScrubSeconds = val);
+                },
+                onChangeEnd: (val) {
+                  _scrubFrame(val);
+                },
+              ),
               const SizedBox(height: 8),
             ],
+
+            const SizedBox(height: 12),
 
             // Action Buttons
             SizedBox(
@@ -567,6 +854,27 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
           children: [
             Row(
               children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _isMp4
+                        ? const Color(0xFF10B981).withOpacity(0.15)
+                        : const Color(0xFF38BDF8).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: _isMp4 ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
+                    ),
+                  ),
+                  child: Text(
+                    _isMp4 ? 'MP4 فيديو' : 'MP3 صوت',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: _isMp4 ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     _fileName ?? '',
@@ -577,14 +885,42 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
                     ),
                   ),
                 ),
-                OutlinedButton.icon(
-                  onPressed: _pickMp3File,
-                  icon: const Icon(Icons.folder_open_rounded, size: 16),
-                  label: Text(l10n.tr('choose')),
+                PopupMenuButton<String>(
+                  tooltip: l10n.tr('switchFile'),
+                  icon: const Icon(Icons.swap_horiz_rounded),
+                  onSelected: (val) {
+                    if (val == 'mp3') {
+                      _pickMp3File();
+                    } else if (val == 'mp4') {
+                      _pickMp4File();
+                    }
+                  },
+                  itemBuilder: (ctx) => [
+                    PopupMenuItem(
+                      value: 'mp3',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.music_note_rounded, color: Color(0xFF38BDF8), size: 18),
+                          const SizedBox(width: 8),
+                          Text(l10n.tr('pickMp3')),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'mp4',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.movie_rounded, color: Color(0xFF10B981), size: 18),
+                          const SizedBox(width: 8),
+                          Text(l10n.tr('pickMp4')),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             // File properties chips
             Row(
               children: [
@@ -597,7 +933,7 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
                     ),
                   ),
                 const SizedBox(width: 8),
-                if (_bitrate > 0)
+                if (!_isMp4 && _bitrate > 0)
                   Chip(
                     avatar: const Icon(Icons.speed_rounded, size: 14),
                     label: Text(

@@ -283,6 +283,7 @@ class BatchConversionService extends ChangeNotifier {
           resolution: item.resolutionOverride ?? settings.defaultResolution,
           videoBitrate: item.videoBitrateOverride ?? settings.defaultVideoBitrate,
           audioBitrate: item.audioBitrateOverride ?? settings.defaultAudioBitrate,
+          hardwareAcceleration: settings.hardwareAcceleration,
           onProgress: (prog) {
             item.progress = prog;
             notifyListeners();

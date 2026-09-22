@@ -21,9 +21,17 @@ class ConversionSettings {
     '320k',
   ];
 
+  static const List<String> availableHwAccels = [
+    'auto',
+    'nvenc',
+    'vaapi',
+    'cpu_ultrafast',
+  ];
+
   String defaultResolution;
   String defaultVideoBitrate;
   String defaultAudioBitrate;
+  String hardwareAcceleration;
   String? outputFolder;
   String filenamePattern;
 
@@ -31,6 +39,7 @@ class ConversionSettings {
     this.defaultResolution = '1920x1080',
     this.defaultVideoBitrate = '5000k',
     this.defaultAudioBitrate = '320k',
+    this.hardwareAcceleration = 'auto',
     this.outputFolder,
     this.filenamePattern = '{name}_hawwil',
   });
@@ -39,6 +48,7 @@ class ConversionSettings {
     String? defaultResolution,
     String? defaultVideoBitrate,
     String? defaultAudioBitrate,
+    String? hardwareAcceleration,
     String? outputFolder,
     String? filenamePattern,
   }) {
@@ -46,6 +56,7 @@ class ConversionSettings {
       defaultResolution: defaultResolution ?? this.defaultResolution,
       defaultVideoBitrate: defaultVideoBitrate ?? this.defaultVideoBitrate,
       defaultAudioBitrate: defaultAudioBitrate ?? this.defaultAudioBitrate,
+      hardwareAcceleration: hardwareAcceleration ?? this.hardwareAcceleration,
       outputFolder: outputFolder ?? this.outputFolder,
       filenamePattern: filenamePattern ?? this.filenamePattern,
     );

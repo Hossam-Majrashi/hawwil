@@ -9,6 +9,7 @@ class SettingsService extends ChangeNotifier {
   static const String _keyResolution = 'hawwil_resolution';
   static const String _keyVideoBitrate = 'hawwil_video_bitrate';
   static const String _keyAudioBitrate = 'hawwil_audio_bitrate';
+  static const String _keyHardwareAcceleration = 'hawwil_hwaccel';
   static const String _keyOutputFolder = 'hawwil_output_folder';
   static const String _keyFilenamePattern = 'hawwil_filename_pattern';
 
@@ -47,6 +48,7 @@ class SettingsService extends ChangeNotifier {
       defaultResolution: _prefs.getString(_keyResolution) ?? '1920x1080',
       defaultVideoBitrate: _prefs.getString(_keyVideoBitrate) ?? '5000k',
       defaultAudioBitrate: _prefs.getString(_keyAudioBitrate) ?? '320k',
+      hardwareAcceleration: _prefs.getString(_keyHardwareAcceleration) ?? 'auto',
       outputFolder: _prefs.getString(_keyOutputFolder),
       filenamePattern: _prefs.getString(_keyFilenamePattern) ?? '{name}_hawwil',
     );
@@ -83,6 +85,7 @@ class SettingsService extends ChangeNotifier {
     String? defaultResolution,
     String? defaultVideoBitrate,
     String? defaultAudioBitrate,
+    String? hardwareAcceleration,
     String? outputFolder,
     String? filenamePattern,
   }) async {
@@ -90,6 +93,7 @@ class SettingsService extends ChangeNotifier {
       defaultResolution: defaultResolution,
       defaultVideoBitrate: defaultVideoBitrate,
       defaultAudioBitrate: defaultAudioBitrate,
+      hardwareAcceleration: hardwareAcceleration,
       outputFolder: outputFolder,
       filenamePattern: filenamePattern,
     );
@@ -102,6 +106,9 @@ class SettingsService extends ChangeNotifier {
     }
     if (defaultAudioBitrate != null) {
       await _prefs.setString(_keyAudioBitrate, defaultAudioBitrate);
+    }
+    if (hardwareAcceleration != null) {
+      await _prefs.setString(_keyHardwareAcceleration, hardwareAcceleration);
     }
     if (outputFolder != null) {
       await _prefs.setString(_keyOutputFolder, outputFolder);

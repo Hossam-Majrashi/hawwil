@@ -30,6 +30,7 @@ class DesktopCreateProjectScreen extends StatefulWidget {
 
 class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen> {
   late ConversionSettings _projectSettings;
+  HwAccelInfo? _hwAccelInfo;
 
   @override
   void initState() {
@@ -41,6 +42,12 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
     if (!widget.batchService.isProcessing && widget.batchService.hasCompletedItems) {
       widget.batchService.clearCompleted();
     }
+
+    FFmpegService.detectHardwareAcceleration().then((info) {
+      if (mounted) {
+        setState(() => _hwAccelInfo = info);
+      }
+    });
   }
 
   @override
@@ -543,87 +550,146 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
               fontWeight: FontWeight.bold,
             ),
           ),
-          const SizedBox(height: 20),
-
-          // Resolution
-          Text(l10n.tr('resolution'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
-          const SizedBox(height: 6),
-          DropdownButtonFormField<String>(
-            value: _projectSettings.defaultResolution,
-            items: ConversionSettings.availableResolutions.map((res) {
-              return DropdownMenuItem(value: res, child: Text(res));
-            }).toList(),
-            onChanged: (val) {
-              if (val != null) {
-                setState(() => _projectSettings.defaultResolution = val);
-              }
-            },
-          ),
           const SizedBox(height: 16),
 
-          // Video Bitrate
-          Text(l10n.tr('videoBitrate'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
-          const SizedBox(height: 6),
-          DropdownButtonFormField<String>(
-            value: _projectSettings.defaultVideoBitrate,
-            items: ConversionSettings.availableVideoBitrates.map((br) {
-              return DropdownMenuItem(value: br, child: Text(br));
-            }).toList(),
-            onChanged: (val) {
-              if (val != null) {
-                setState(() => _projectSettings.defaultVideoBitrate = val);
-              }
-            },
-          ),
-          const SizedBox(height: 16),
-
-          // Audio Bitrate
-          Text(l10n.tr('audioBitrate'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
-          const SizedBox(height: 6),
-          DropdownButtonFormField<String>(
-            value: _projectSettings.defaultAudioBitrate,
-            items: ConversionSettings.availableAudioBitrates.map((br) {
-              return DropdownMenuItem(value: br, child: Text(br));
-            }).toList(),
-            onChanged: (val) {
-              if (val != null) {
-                setState(() => _projectSettings.defaultAudioBitrate = val);
-              }
-            },
-          ),
-          const SizedBox(height: 20),
-
-          // Output Folder
-          Text(l10n.tr('defaultOutputFolder'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
-          const SizedBox(height: 6),
-          InkWell(
-            onTap: _pickOutputFolder,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: isDark ? const Color(0xFF3F444D) : const Color(0xFFD1D5DB),
-                ),
-              ),
-              child: Row(
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.folder_open_rounded, size: 20),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      _projectSettings.outputFolder ?? l10n.tr('notSet'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12),
+                  // Hardware Acceleration
+                  Text(l10n.tr('hardwareAcceleration'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<String>(
+                    value: _projectSettings.hardwareAcceleration,
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.bolt_rounded, color: Color(0xFF10B981), size: 20),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    ),
+                    items: [
+                      DropdownMenuItem(value: 'auto', child: Text(l10n.tr('hwAccelAuto'), style: const TextStyle(fontSize: 12))),
+                      DropdownMenuItem(value: 'nvenc', child: Text(l10n.tr('hwAccelNvenc'), style: const TextStyle(fontSize: 12))),
+                      DropdownMenuItem(value: 'vaapi', child: Text(l10n.tr('hwAccelVaapi'), style: const TextStyle(fontSize: 12))),
+                      DropdownMenuItem(value: 'cpu_ultrafast', child: Text(l10n.tr('hwAccelCpuUltrafast'), style: const TextStyle(fontSize: 12))),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _projectSettings.hardwareAcceleration = val);
+                      }
+                    },
+                  ),
+                  if (_hwAccelInfo != null) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF10B981).withOpacity(0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.speed_rounded, size: 14, color: Color(0xFF10B981)),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              _hwAccelInfo!.description,
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF10B981)),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+
+                  // Resolution
+                  Text(l10n.tr('resolution'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<String>(
+                    value: _projectSettings.defaultResolution,
+                    items: ConversionSettings.availableResolutions.map((res) {
+                      return DropdownMenuItem(value: res, child: Text(res));
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _projectSettings.defaultResolution = val);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Video Bitrate
+                  Text(l10n.tr('videoBitrate'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<String>(
+                    value: _projectSettings.defaultVideoBitrate,
+                    items: ConversionSettings.availableVideoBitrates.map((br) {
+                      return DropdownMenuItem(value: br, child: Text(br));
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _projectSettings.defaultVideoBitrate = val);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Audio Bitrate
+                  Text(l10n.tr('audioBitrate'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<String>(
+                    value: _projectSettings.defaultAudioBitrate,
+                    items: ConversionSettings.availableAudioBitrates.map((br) {
+                      return DropdownMenuItem(value: br, child: Text(br));
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _projectSettings.defaultAudioBitrate = val);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Output Folder
+                  Text(l10n.tr('defaultOutputFolder'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  const SizedBox(height: 6),
+                  InkWell(
+                    onTap: _pickOutputFolder,
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isDark ? const Color(0xFF3F444D) : const Color(0xFFD1D5DB),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.folder_open_rounded, size: 20),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _projectSettings.outputFolder ?? l10n.tr('notSet'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
+                  const SizedBox(height: 16),
                 ],
               ),
             ),
           ),
-          const Spacer(),
+
+          const SizedBox(height: 16),
 
           // Start Button
           ElevatedButton.icon(
