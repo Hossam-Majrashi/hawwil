@@ -145,6 +145,10 @@ class AppLocalizations {
       'imageDimensions': '{width} × {height} بكسل ({size})',
       'coverFitContain': 'احتواء كامل (بدون قص)',
       'coverFitCover': 'ملء الإطار (قص الأطراف)',
+      'downloadCover': 'تنزيل الغلاف',
+      'downloadCoverTooltip': 'تنزيل صورة الغلاف الحالية',
+      'coverDownloaded': 'تم تنزيل صورة الغلاف بنجاح',
+      'coverDownloadFailed': 'تعذر تنزيل صورة الغلاف',
 
       // Settings
       'settingsTitle': 'الإعدادات العامة',
@@ -300,6 +304,10 @@ class AppLocalizations {
       'imageDimensions': '{width} × {height} px ({size})',
       'coverFitContain': 'Contain (No Crop)',
       'coverFitCover': 'Fill Frame (Crop)',
+      'downloadCover': 'Download Cover',
+      'downloadCoverTooltip': 'Download current cover art',
+      'coverDownloaded': 'Cover art downloaded successfully',
+      'coverDownloadFailed': 'Failed to download cover art',
 
       // Settings
       'settingsTitle': 'General Settings',

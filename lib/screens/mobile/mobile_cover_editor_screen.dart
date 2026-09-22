@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import '../../l10n/app_localizations.dart';
 import '../../services/taglib_service.dart';
+import '../../services/cover_download_service.dart';
 
 class MobileCoverEditorScreen extends StatefulWidget {
   final VoidCallback onBack;
@@ -131,8 +132,18 @@ class _MobileCoverEditorScreenState extends State<MobileCoverEditorScreen> {
     });
   }
 
+  Future<void> _downloadCover() async {
+    if (_coverBytes == null || _coverBytes!.isEmpty) return;
+    await CoverDownloadService.downloadCoverWithFeedback(
+      context: context,
+      coverBytes: _coverBytes!,
+      mp3FileName: _fileName,
+    );
+  }
+
   void _openFullImageViewer() {
     if (_coverBytes == null || _coverBytes!.isEmpty) return;
+    final l10n = AppLocalizations.of(context);
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
@@ -168,12 +179,26 @@ class _MobileCoverEditorScreenState extends State<MobileCoverEditorScreen> {
             Positioned(
               top: 6,
               right: 6,
-              child: CircleAvatar(
-                backgroundColor: Colors.black87,
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white),
-                  onPressed: () => Navigator.pop(ctx),
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    backgroundColor: Colors.black87,
+                    child: IconButton(
+                      tooltip: l10n.tr('downloadCover'),
+                      icon: const Icon(Icons.file_download_outlined, color: Colors.white, size: 20),
+                      onPressed: _downloadCover,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  CircleAvatar(
+                    backgroundColor: Colors.black87,
+                    child: IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white, size: 20),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -368,24 +393,37 @@ class _MobileCoverEditorScreenState extends State<MobileCoverEditorScreen> {
                         const SizedBox(height: 14),
 
                         // Image actions
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: _pickNewCover,
-                                icon: const Icon(Icons.photo_library_outlined, size: 16),
-                                label: Text(l10n.tr('uploadNewCover'), style: const TextStyle(fontSize: 12)),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: _pickNewCover,
+                            icon: const Icon(Icons.photo_library_outlined, size: 16),
+                            label: Text(l10n.tr('uploadNewCover')),
+                          ),
+                        ),
+                        if (hasCover) ...[
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: FilledButton.tonalIcon(
+                                  onPressed: _downloadCover,
+                                  icon: const Icon(Icons.file_download_outlined, size: 16),
+                                  label: Text(l10n.tr('downloadCover')),
+                                ),
                               ),
-                            ),
-                            if (hasCover) ...[
                               const SizedBox(width: 8),
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+                              OutlinedButton.icon(
                                 onPressed: _removeCover,
+                                icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 16),
+                                label: Text(
+                                  l10n.tr('removeCover'),
+                                  style: const TextStyle(color: Colors.redAccent),
+                                ),
                               ),
                             ],
-                          ],
-                        ),
+                          ),
+                        ],
                         const SizedBox(height: 24),
 
                         // Tags

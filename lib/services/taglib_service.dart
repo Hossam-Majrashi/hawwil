@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_taglib/flutter_taglib.dart';
+import 'id3_parser.dart';
 
 class AudioMetadataResult {
   final String title;
@@ -54,6 +55,15 @@ class TagLibService {
     try {
       final file = TagLibFile.open(filePath);
       if (file == null) {
+        // Fallback to pure Dart Id3Parser
+        try {
+          final rawBytes = await File(filePath).readAsBytes();
+          final parsed = Id3Parser.parse(rawBytes);
+          if (parsed.hasCover || parsed.title.isNotEmpty) {
+            return parsed;
+          }
+        } catch (_) {}
+
         return AudioMetadataResult(
           success: false,
           error: TagLibFile.lastError ?? 'Could not open file with TagLib',
@@ -84,6 +94,18 @@ class TagLibService {
 
       file.close();
 
+      if (!hasCover) {
+        try {
+          final rawBytes = await File(filePath).readAsBytes();
+          final parsed = Id3Parser.parse(rawBytes);
+          if (parsed.hasCover && parsed.coverBytes != null) {
+            coverBytes = parsed.coverBytes;
+            mimeType = parsed.coverMimeType;
+            hasCover = true;
+          }
+        } catch (_) {}
+      }
+
       return AudioMetadataResult(
         title: title,
         artist: artist,
@@ -104,6 +126,11 @@ class TagLibService {
         error: e.toString(),
       );
     }
+  }
+
+  /// Parse metadata and cover art directly from raw bytes (universal / Web)
+  static AudioMetadataResult readMetadataFromBytes(Uint8List bytes) {
+    return Id3Parser.parse(bytes);
   }
 
   /// Update cover art and/or metadata tags in an MP3 file in-place

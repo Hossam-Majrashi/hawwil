@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/id3_parser.dart';
+import '../../services/cover_download_service.dart';
 
 class WebCoverEditorScreen extends StatefulWidget {
   final VoidCallback onBack;
@@ -61,11 +63,31 @@ class _WebCoverEditorScreenState extends State<WebCoverEditorScreen> {
 
     if (files.isNotEmpty) {
       final f = files.first;
+      final bytes = await f.readAsBytes();
       if (!mounted) return;
       setState(() {
         _fileName = f.name;
         _titleController.text = f.name.replaceAll('.mp3', '');
+        _coverBytes = null;
+        _coverWidth = null;
+        _coverHeight = null;
       });
+
+      if (bytes.isNotEmpty) {
+        final meta = Id3Parser.parse(bytes);
+        if (!mounted) return;
+        setState(() {
+          if (meta.title.isNotEmpty) _titleController.text = meta.title;
+          if (meta.artist.isNotEmpty) _artistController.text = meta.artist;
+          if (meta.album.isNotEmpty) _albumController.text = meta.album;
+          if (meta.hasCover && meta.coverBytes != null && meta.coverBytes!.isNotEmpty) {
+            _coverBytes = meta.coverBytes;
+          }
+        });
+        if (_coverBytes != null) {
+          await _decodeCoverDimensions(_coverBytes!);
+        }
+      }
       WidgetsBinding.instance.scheduleFrame();
     }
   }
@@ -86,8 +108,18 @@ class _WebCoverEditorScreenState extends State<WebCoverEditorScreen> {
     }
   }
 
+  Future<void> _downloadCover() async {
+    if (_coverBytes == null || _coverBytes!.isEmpty) return;
+    await CoverDownloadService.downloadCoverWithFeedback(
+      context: context,
+      coverBytes: _coverBytes!,
+      mp3FileName: _fileName,
+    );
+  }
+
   void _openFullImageViewer() {
     if (_coverBytes == null || _coverBytes!.isEmpty) return;
+    final l10n = AppLocalizations.of(context);
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
@@ -123,12 +155,26 @@ class _WebCoverEditorScreenState extends State<WebCoverEditorScreen> {
             Positioned(
               top: 8,
               right: 8,
-              child: CircleAvatar(
-                backgroundColor: Colors.black87,
-                child: IconButton(
-                  icon: const Icon(Icons.close, color: Colors.white),
-                  onPressed: () => Navigator.pop(ctx),
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    backgroundColor: Colors.black87,
+                    child: IconButton(
+                      tooltip: l10n.tr('downloadCover'),
+                      icon: const Icon(Icons.file_download_outlined, color: Colors.white),
+                      onPressed: _downloadCover,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  CircleAvatar(
+                    backgroundColor: Colors.black87,
+                    child: IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -274,11 +320,25 @@ class _WebCoverEditorScreenState extends State<WebCoverEditorScreen> {
                                 ),
                                 const SizedBox(height: 10),
                               ],
-                              OutlinedButton.icon(
-                                onPressed: _pickImage,
-                                icon: const Icon(Icons.image_outlined, size: 16),
-                                label: Text(l10n.tr('uploadNewCover'), style: const TextStyle(fontSize: 12)),
+                              SizedBox(
+                                width: 220,
+                                child: OutlinedButton.icon(
+                                  onPressed: _pickImage,
+                                  icon: const Icon(Icons.image_outlined, size: 16),
+                                  label: Text(l10n.tr('uploadNewCover'), style: const TextStyle(fontSize: 12)),
+                                ),
                               ),
+                              if (_coverBytes != null) ...[
+                                const SizedBox(height: 8),
+                                SizedBox(
+                                  width: 220,
+                                  child: FilledButton.tonalIcon(
+                                    onPressed: _downloadCover,
+                                    icon: const Icon(Icons.file_download_outlined, size: 16),
+                                    label: Text(l10n.tr('downloadCover'), style: const TextStyle(fontSize: 12)),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                           const SizedBox(width: 28),
