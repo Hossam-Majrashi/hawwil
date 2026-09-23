@@ -4,6 +4,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/conversion_settings.dart';
 import '../../services/settings_service.dart';
 import '../../services/ffmpeg_service.dart';
+import '../../widgets/developer_section.dart';
 
 class DesktopSettingsScreen extends StatefulWidget {
   final SettingsService settingsService;
@@ -390,6 +391,8 @@ class _DesktopSettingsScreenState extends State<DesktopSettingsScreen> {
                   ),
                 ),
               ),
+              const SizedBox(height: 32),
+              const DeveloperSection(),
             ],
           ),
         ),

@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/conversion_settings.dart';
 import '../../services/settings_service.dart';
+import '../../widgets/developer_section.dart';
 
 class MobileSettingsScreen extends StatefulWidget {
   final SettingsService settingsService;
@@ -224,6 +225,8 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
                 ),
               ),
             ),
+            const SizedBox(height: 24),
+            const DeveloperSection(),
           ],
         ),
       ),

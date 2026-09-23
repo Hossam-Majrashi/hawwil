@@ -206,6 +206,11 @@ class AppLocalizations {
       'webNoticeTitle': 'ملاحظة إصدار الويب',
       'webNoticeDesc':
           'يمكنك معاينة الملفات وتجربة الواجهة على الويب. لتنفيذ التحويل الكامل والترميز الفائق بالسرعة القصوى، يرجى تشغيل تطبيق سطح المكتب أو الهاتف.',
+
+      // Developer
+      'developer': 'المطور',
+      'email': 'البريد الإلكتروني',
+      'website': 'الموقع الإلكتروني',
     },
     'en': {
       // General
@@ -395,8 +400,17 @@ class AppLocalizations {
       'webNoticeTitle': 'Web Version Notice',
       'webNoticeDesc':
           'You can explore the interface and preview files on the web. For full native conversion and encoding, please run the desktop or mobile application.',
+
+      // Developer
+      'developer': 'Developer',
+      'email': 'Email',
+      'website': 'Website',
     }
   };
+
+  String get developer => tr('developer');
+  String get email => tr('email');
+  String get website => tr('website');
 
   String tr(String key, [Map<String, String>? params]) {
     final lang = locale.languageCode == 'ar' ? 'ar' : 'en';

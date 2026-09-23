@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/conversion_settings.dart';
 import '../../services/settings_service.dart';
+import '../../widgets/developer_section.dart';
 
 class WebSettingsScreen extends StatefulWidget {
   final SettingsService settingsService;
@@ -139,6 +140,8 @@ class _WebSettingsScreenState extends State<WebSettingsScreen> {
                   ),
                 ),
               ),
+              const SizedBox(height: 20),
+              const DeveloperSection(),
             ],
           ),
         ),

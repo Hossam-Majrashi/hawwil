@@ -41,6 +41,7 @@ dependencies:
   path: ^1.9.1
   shared_preferences: ^2.5.5
   intl: ^0.20.3
+  url_launcher: ^6.3.2
   flutter_localizations:
     sdk: flutter
 
