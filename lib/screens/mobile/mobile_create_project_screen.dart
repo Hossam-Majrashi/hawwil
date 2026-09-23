@@ -58,12 +58,15 @@ class _MobileCreateProjectScreenState extends State<MobileCreateProjectScreen> {
   Future<void> _pickFiles() async {
     final files = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['mp3', 'mp4', 'm4v', 'mov', 'mkv', 'webm', 'wav', 'aac'],
+      allowedExtensions: ConversionItem.allAllowedInputExtensions,
     );
 
     if (files.isNotEmpty) {
       final validPaths = files.map((f) => f.path).whereType<String>().toList();
-      widget.batchService.addFiles(validPaths);
+      widget.batchService.addFiles(
+        validPaths,
+        defaultVideoTarget: _projectSettings.defaultVideoOutputFormat,
+      );
       if (mounted) {
         setState(() {});
         WidgetsBinding.instance.scheduleFrame();
@@ -113,6 +116,52 @@ class _MobileCreateProjectScreenState extends State<MobileCreateProjectScreen> {
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
+              // Batch Video Output Format
+              Text(l10n.tr('videoOutputFormatBatch'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              const SizedBox(height: 4),
+              DropdownButtonFormField<String>(
+                value: _projectSettings.defaultVideoOutputFormat,
+                isExpanded: true,
+                items: ConversionSettings.allOutputFormatsForVideos.map((fmt) {
+                  return DropdownMenuItem(
+                    value: fmt,
+                    child: Text(
+                      l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}'),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  );
+                }).toList(),
+                onChanged: (val) {
+                  if (val != null) {
+                    setModalState(() => _projectSettings.defaultVideoOutputFormat = val);
+                    setState(() {});
+                  }
+                },
+              ),
+              const SizedBox(height: 6),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    minimumSize: const Size(0, 32),
+                  ),
+                  onPressed: () {
+                    widget.batchService.setBatchTargetFormat(_projectSettings.defaultVideoOutputFormat);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          '${l10n.tr('applyToAllVideos')}: ${_projectSettings.defaultVideoOutputFormat.toUpperCase()}',
+                        ),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.done_all_rounded, size: 15),
+                  label: Text(l10n.tr('applyToAllVideos'), style: const TextStyle(fontSize: 11)),
+                ),
+              ),
+              const SizedBox(height: 12),
               // Resolution
               Text(l10n.tr('resolution'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
               const SizedBox(height: 4),
@@ -321,7 +370,7 @@ class _MobileCreateProjectScreenState extends State<MobileCreateProjectScreen> {
                                       placeholderIcon: isMp3ToMp4
                                           ? Icons.music_note_rounded
                                           : Icons.videocam_rounded,
-                                      badgeText: isMp3ToMp4 ? 'MP3' : 'MP4',
+                                      badgeText: item.fileExtension.toUpperCase(),
                                       badgeColor: isMp3ToMp4
                                           ? Colors.blueAccent
                                           : Colors.purpleAccent,
@@ -338,14 +387,65 @@ class _MobileCreateProjectScreenState extends State<MobileCreateProjectScreen> {
                                             style: const TextStyle(fontWeight: FontWeight.bold),
                                           ),
                                           const SizedBox(height: 4),
-                                          InkWell(
-                                            onTap: () => widget.batchService.toggleDirection(item),
-                                            child: Text(
-                                              isMp3ToMp4 ? 'MP3 ➔ MP4' : 'MP4 ➔ MP3',
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.bold,
-                                                color: isMp3ToMp4 ? Colors.blue : Colors.purple,
+                                          PopupMenuButton<String>(
+                                            tooltip: l10n.tr('targetFormat'),
+                                            initialValue: item.targetFormat,
+                                            onSelected: (val) {
+                                              widget.batchService.setTargetFormat(item, val);
+                                            },
+                                            itemBuilder: (context) {
+                                              if (item.isAudioInput) {
+                                                return ConversionSettings.availableVideoFormats.map(
+                                                  (fmt) => PopupMenuItem(
+                                                    value: fmt,
+                                                    child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
+                                                  ),
+                                                ).toList();
+                                              } else {
+                                                return [
+                                                  PopupMenuItem(
+                                                    value: 'mp3',
+                                                    child: Text(l10n.tr('formatMp3')),
+                                                  ),
+                                                  const PopupMenuDivider(),
+                                                  ...ConversionSettings.availableVideoFormats.map(
+                                                    (fmt) => PopupMenuItem(
+                                                      value: fmt,
+                                                      child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
+                                                    ),
+                                                  ),
+                                                ];
+                                              }
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: (item.isTargetAudio ? Colors.blue : Colors.purple)
+                                                    .withOpacity(0.12),
+                                                borderRadius: BorderRadius.circular(6),
+                                                border: Border.all(
+                                                  color: (item.isTargetAudio ? Colors.blue : Colors.purple)
+                                                      .withOpacity(0.3),
+                                                ),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    '${item.fileExtension.toUpperCase()} ➔ ${item.targetFormat.toUpperCase()}',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: item.isTargetAudio ? Colors.blue : Colors.purple,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 2),
+                                                  Icon(
+                                                    Icons.arrow_drop_down_rounded,
+                                                    size: 16,
+                                                    color: item.isTargetAudio ? Colors.blue : Colors.purple,
+                                                  ),
+                                                ],
                                               ),
                                             ),
                                           ),

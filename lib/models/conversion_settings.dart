@@ -28,10 +28,32 @@ class ConversionSettings {
     'cpu_ultrafast',
   ];
 
+  static const List<String> availableVideoFormats = [
+    'mp4',
+    'mkv',
+    'mov',
+    'webm',
+    'avi',
+    'flv',
+    'wmv',
+  ];
+
+  static const List<String> allOutputFormatsForVideos = [
+    'mp4',
+    'mkv',
+    'mov',
+    'webm',
+    'avi',
+    'flv',
+    'wmv',
+    'mp3',
+  ];
+
   String defaultResolution;
   String defaultVideoBitrate;
   String defaultAudioBitrate;
   String hardwareAcceleration;
+  String defaultVideoOutputFormat;
   String? outputFolder;
   String filenamePattern;
 
@@ -40,6 +62,7 @@ class ConversionSettings {
     this.defaultVideoBitrate = '5000k',
     this.defaultAudioBitrate = '320k',
     this.hardwareAcceleration = 'auto',
+    this.defaultVideoOutputFormat = 'mp4',
     this.outputFolder,
     this.filenamePattern = '{name}_hawwil',
   });
@@ -49,6 +72,7 @@ class ConversionSettings {
     String? defaultVideoBitrate,
     String? defaultAudioBitrate,
     String? hardwareAcceleration,
+    String? defaultVideoOutputFormat,
     String? outputFolder,
     String? filenamePattern,
   }) {
@@ -57,6 +81,7 @@ class ConversionSettings {
       defaultVideoBitrate: defaultVideoBitrate ?? this.defaultVideoBitrate,
       defaultAudioBitrate: defaultAudioBitrate ?? this.defaultAudioBitrate,
       hardwareAcceleration: hardwareAcceleration ?? this.hardwareAcceleration,
+      defaultVideoOutputFormat: defaultVideoOutputFormat ?? this.defaultVideoOutputFormat,
       outputFolder: outputFolder ?? this.outputFolder,
       filenamePattern: filenamePattern ?? this.filenamePattern,
     );

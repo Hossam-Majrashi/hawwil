@@ -113,16 +113,34 @@ class WebProgressScreen extends StatelessWidget {
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (context, index) {
                           final item = items[index];
-                          final isMp3 = item.direction == ConversionDirection.mp3ToMp4;
 
                           return Card(
                             child: ListTile(
                               leading: ThumbnailPreview(
                                 bytes: item.thumbnailBytes,
                                 size: 48,
-                                badgeText: isMp3 ? 'MP3' : 'MP4',
+                                badgeText: item.fileExtension.toUpperCase(),
                               ),
-                              title: Text(item.fileName, maxLines: 1),
+                              title: Row(
+                                children: [
+                                  Expanded(child: Text(item.fileName, maxLines: 1)),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                    decoration: BoxDecoration(
+                                      color: (item.isTargetAudio ? Colors.blue : Colors.purple).withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      '${item.fileExtension.toUpperCase()} ➔ ${item.targetFormat.toUpperCase()}',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                        color: item.isTargetAudio ? Colors.blue : Colors.purple,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                               subtitle: Text(
                                 item.errorMessage ??
                                     (item.status == ConversionStatus.completed

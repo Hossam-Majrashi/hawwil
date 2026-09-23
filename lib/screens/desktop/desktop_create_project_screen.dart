@@ -65,12 +65,15 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
   Future<void> _pickFiles() async {
     final files = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['mp3', 'mp4', 'm4v', 'mov', 'mkv', 'webm', 'wav', 'aac'],
+      allowedExtensions: ConversionItem.allAllowedInputExtensions,
     );
 
     if (files.isNotEmpty) {
       final validPaths = files.map((f) => f.path).whereType<String>().toList();
-      widget.batchService.addFiles(validPaths);
+      widget.batchService.addFiles(
+        validPaths,
+        defaultVideoTarget: _projectSettings.defaultVideoOutputFormat,
+      );
       if (mounted) {
         setState(() {});
         WidgetsBinding.instance.scheduleFrame();
@@ -357,7 +360,7 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
                   placeholderIcon: isMp3ToMp4
                       ? Icons.music_note_rounded
                       : Icons.videocam_rounded,
-                  badgeText: isMp3ToMp4 ? 'MP3' : 'MP4',
+                  badgeText: item.fileExtension.toUpperCase(),
                   badgeColor: isMp3ToMp4 ? Colors.blueAccent : Colors.purpleAccent,
                 ),
                 const SizedBox(width: 16),
@@ -388,18 +391,63 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
                         ],
                       ),
                       const SizedBox(height: 6),
-                      // Direction Chip with toggle
-                      InkWell(
-                        onTap: () => widget.batchService.toggleDirection(item),
-                        borderRadius: BorderRadius.circular(8),
+                      // Target Format Selector Menu
+                      PopupMenuButton<String>(
+                        tooltip: l10n.tr('targetFormat'),
+                        initialValue: item.targetFormat,
+                        onSelected: (val) {
+                          widget.batchService.setTargetFormat(item, val);
+                        },
+                        itemBuilder: (context) {
+                          if (item.isAudioInput) {
+                            return ConversionSettings.availableVideoFormats.map(
+                              (fmt) => PopupMenuItem(
+                                value: fmt,
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.movie_rounded, size: 16, color: Colors.purpleAccent),
+                                    const SizedBox(width: 8),
+                                    Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
+                                  ],
+                                ),
+                              ),
+                            ).toList();
+                          } else {
+                            return [
+                              PopupMenuItem(
+                                value: 'mp3',
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.music_note_rounded, size: 16, color: Colors.blueAccent),
+                                    const SizedBox(width: 8),
+                                    Text(l10n.tr('formatMp3')),
+                                  ],
+                                ),
+                              ),
+                              const PopupMenuDivider(),
+                              ...ConversionSettings.availableVideoFormats.map(
+                                (fmt) => PopupMenuItem(
+                                  value: fmt,
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.movie_rounded, size: 16, color: Colors.purpleAccent),
+                                      const SizedBox(width: 8),
+                                      Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ];
+                          }
+                        },
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: (isMp3ToMp4 ? Colors.blue : Colors.purple)
+                            color: (item.isTargetAudio ? Colors.blue : Colors.purple)
                                 .withOpacity(0.12),
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                              color: (isMp3ToMp4 ? Colors.blue : Colors.purple)
+                              color: (item.isTargetAudio ? Colors.blue : Colors.purple)
                                   .withOpacity(0.4),
                             ),
                           ),
@@ -407,20 +455,24 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(
-                                Icons.swap_horiz_rounded,
+                                item.isTargetAudio ? Icons.music_note_rounded : Icons.videocam_rounded,
                                 size: 14,
-                                color: isMp3ToMp4 ? Colors.blue : Colors.purple,
+                                color: item.isTargetAudio ? Colors.blue : Colors.purple,
                               ),
                               const SizedBox(width: 6),
                               Text(
-                                isMp3ToMp4
-                                    ? l10n.tr('mp3ToMp4')
-                                    : l10n.tr('mp4ToMp3'),
+                                '${item.fileExtension.toUpperCase()} ➔ ${item.targetFormat.toUpperCase()}',
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.bold,
-                                  color: isMp3ToMp4 ? Colors.blue : Colors.purple,
+                                  color: item.isTargetAudio ? Colors.blue : Colors.purple,
                                 ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(
+                                Icons.arrow_drop_down_rounded,
+                                size: 16,
+                                color: item.isTargetAudio ? Colors.blue : Colors.purple,
                               ),
                             ],
                           ),
@@ -603,6 +655,55 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
                       ),
                     ),
                   ],
+                  const SizedBox(height: 16),
+
+                  // Batch Video Output Format
+                  Text(l10n.tr('videoOutputFormatBatch'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  const SizedBox(height: 6),
+                  DropdownButtonFormField<String>(
+                    value: _projectSettings.defaultVideoOutputFormat,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    ),
+                    items: ConversionSettings.allOutputFormatsForVideos.map((fmt) {
+                      return DropdownMenuItem(
+                        value: fmt,
+                        child: Text(
+                          l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}'),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _projectSettings.defaultVideoOutputFormat = val);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        minimumSize: const Size(0, 32),
+                      ),
+                      onPressed: () {
+                        widget.batchService.setBatchTargetFormat(_projectSettings.defaultVideoOutputFormat);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              '${l10n.tr('applyToAllVideos')}: ${_projectSettings.defaultVideoOutputFormat.toUpperCase()}',
+                            ),
+                            duration: const Duration(seconds: 2),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.done_all_rounded, size: 15),
+                      label: Text(l10n.tr('applyToAllVideos'), style: const TextStyle(fontSize: 11)),
+                    ),
+                  ),
                   const SizedBox(height: 16),
 
                   // Resolution

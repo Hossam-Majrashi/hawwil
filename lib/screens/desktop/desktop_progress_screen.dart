@@ -249,7 +249,7 @@ class DesktopProgressScreen extends StatelessWidget {
         break;
     }
 
-    final isMp3ToMp4 = item.direction == ConversionDirection.mp3ToMp4;
+    final isAudio = item.isAudioInput;
 
     return Card(
       child: Padding(
@@ -261,22 +261,43 @@ class DesktopProgressScreen extends StatelessWidget {
                 ThumbnailPreview(
                   bytes: item.thumbnailBytes,
                   size: 56,
-                  placeholderIcon: isMp3ToMp4
+                  placeholderIcon: isAudio
                       ? Icons.music_note_rounded
                       : Icons.videocam_rounded,
-                  badgeText: isMp3ToMp4 ? 'MP3' : 'MP4',
-                  badgeColor: isMp3ToMp4 ? Colors.blueAccent : Colors.purpleAccent,
+                  badgeText: item.fileExtension.toUpperCase(),
+                  badgeColor: isAudio ? Colors.blueAccent : Colors.purpleAccent,
                 ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        item.fileName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              item.fileName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: (item.isTargetAudio ? Colors.blue : Colors.purple).withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              '${item.fileExtension.toUpperCase()} ➔ ${item.targetFormat.toUpperCase()}',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: item.isTargetAudio ? Colors.blue : Colors.purple,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 4),
                       Row(

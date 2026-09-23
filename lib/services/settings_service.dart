@@ -10,6 +10,7 @@ class SettingsService extends ChangeNotifier {
   static const String _keyVideoBitrate = 'hawwil_video_bitrate';
   static const String _keyAudioBitrate = 'hawwil_audio_bitrate';
   static const String _keyHardwareAcceleration = 'hawwil_hwaccel';
+  static const String _keyVideoOutputFormat = 'hawwil_video_output_format';
   static const String _keyOutputFolder = 'hawwil_output_folder';
   static const String _keyFilenamePattern = 'hawwil_filename_pattern';
 
@@ -49,6 +50,7 @@ class SettingsService extends ChangeNotifier {
       defaultVideoBitrate: _prefs.getString(_keyVideoBitrate) ?? '5000k',
       defaultAudioBitrate: _prefs.getString(_keyAudioBitrate) ?? '320k',
       hardwareAcceleration: _prefs.getString(_keyHardwareAcceleration) ?? 'auto',
+      defaultVideoOutputFormat: _prefs.getString(_keyVideoOutputFormat) ?? 'mp4',
       outputFolder: _prefs.getString(_keyOutputFolder),
       filenamePattern: _prefs.getString(_keyFilenamePattern) ?? '{name}_hawwil',
     );
@@ -86,6 +88,7 @@ class SettingsService extends ChangeNotifier {
     String? defaultVideoBitrate,
     String? defaultAudioBitrate,
     String? hardwareAcceleration,
+    String? defaultVideoOutputFormat,
     String? outputFolder,
     String? filenamePattern,
   }) async {
@@ -94,6 +97,7 @@ class SettingsService extends ChangeNotifier {
       defaultVideoBitrate: defaultVideoBitrate,
       defaultAudioBitrate: defaultAudioBitrate,
       hardwareAcceleration: hardwareAcceleration,
+      defaultVideoOutputFormat: defaultVideoOutputFormat,
       outputFolder: outputFolder,
       filenamePattern: filenamePattern,
     );
@@ -109,6 +113,9 @@ class SettingsService extends ChangeNotifier {
     }
     if (hardwareAcceleration != null) {
       await _prefs.setString(_keyHardwareAcceleration, hardwareAcceleration);
+    }
+    if (defaultVideoOutputFormat != null) {
+      await _prefs.setString(_keyVideoOutputFormat, defaultVideoOutputFormat);
     }
     if (outputFolder != null) {
       await _prefs.setString(_keyOutputFolder, outputFolder);

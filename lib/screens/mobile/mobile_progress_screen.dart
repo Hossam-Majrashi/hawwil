@@ -214,7 +214,7 @@ class MobileProgressScreen extends StatelessWidget {
         break;
     }
 
-    final isMp3ToMp4 = item.direction == ConversionDirection.mp3ToMp4;
+    final isAudio = item.isAudioInput;
 
     return Card(
       child: Padding(
@@ -226,22 +226,43 @@ class MobileProgressScreen extends StatelessWidget {
                 ThumbnailPreview(
                   bytes: item.thumbnailBytes,
                   size: 48,
-                  placeholderIcon: isMp3ToMp4
+                  placeholderIcon: isAudio
                       ? Icons.music_note_rounded
                       : Icons.videocam_rounded,
-                  badgeText: isMp3ToMp4 ? 'MP3' : 'MP4',
-                  badgeColor: isMp3ToMp4 ? Colors.blueAccent : Colors.purpleAccent,
+                  badgeText: item.fileExtension.toUpperCase(),
+                  badgeColor: isAudio ? Colors.blueAccent : Colors.purpleAccent,
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        item.fileName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              item.fileName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: (item.isTargetAudio ? Colors.blue : Colors.purple).withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '${item.fileExtension.toUpperCase()} ➔ ${item.targetFormat.toUpperCase()}',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: item.isTargetAudio ? Colors.blue : Colors.purple,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 4),
                       Row(
@@ -256,6 +277,17 @@ class MobileProgressScreen extends StatelessWidget {
                               color: statusColor,
                             ),
                           ),
+                          if (item.outputPath != null) ...[
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                '➔ ${item.outputPath!.split('/').last.split('\\').last}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 10, color: Colors.grey),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ],

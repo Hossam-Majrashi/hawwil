@@ -42,18 +42,28 @@ class BatchConversionService extends ChangeNotifier {
     return totalProgress / _items.length;
   }
 
-  void addFiles(List<String> paths) {
+  void addFiles(List<String> paths, {String? defaultVideoTarget}) {
     for (final path in paths) {
       final fileName = p.basename(path);
-      final isMp3 = fileName.toLowerCase().endsWith('.mp3');
-      final direction =
-          isMp3 ? ConversionDirection.mp3ToMp4 : ConversionDirection.mp4ToMp3;
+      final ext = fileName.split('.').last.toLowerCase();
+      final isAudio = ConversionItem.supportedInputAudioExtensions.contains(ext) || ext == 'mp3';
+
+      final String target;
+      if (isAudio) {
+        target = 'mp4';
+      } else {
+        if (defaultVideoTarget != null && defaultVideoTarget.isNotEmpty) {
+          target = defaultVideoTarget;
+        } else {
+          target = ext == 'mp4' ? 'mp3' : 'mp4';
+        }
+      }
 
       final item = ConversionItem(
         id: '${DateTime.now().microsecondsSinceEpoch}_${_items.length}',
         sourcePath: path,
         fileName: fileName,
-        direction: direction,
+        targetFormat: target,
       );
 
       _items.add(item);
@@ -96,10 +106,28 @@ class BatchConversionService extends ChangeNotifier {
   }
 
   void toggleDirection(ConversionItem item) {
-    if (item.direction == ConversionDirection.mp3ToMp4) {
-      item.direction = ConversionDirection.mp4ToMp3;
+    if (item.isAudioInput) {
+      return;
+    }
+    if (item.isTargetAudio) {
+      item.targetFormat = 'mp4';
     } else {
-      item.direction = ConversionDirection.mp3ToMp4;
+      item.targetFormat = 'mp3';
+    }
+    notifyListeners();
+  }
+
+  void setTargetFormat(ConversionItem item, String format) {
+    item.targetFormat = format.toLowerCase().replaceAll('.', '');
+    notifyListeners();
+  }
+
+  void setBatchTargetFormat(String format) {
+    final clean = format.toLowerCase().replaceAll('.', '');
+    for (final item in _items) {
+      if (item.isVideoInput) {
+        item.targetFormat = clean;
+      }
     }
     notifyListeners();
   }
@@ -127,7 +155,7 @@ class BatchConversionService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      if (item.direction == ConversionDirection.mp3ToMp4) {
+      if (item.isAudioInput) {
         // Read embedded cover art
         final meta = await TagLibService.readMetadata(item.sourcePath);
         if (meta.hasCover && meta.coverBytes != null) {
@@ -141,7 +169,7 @@ class BatchConversionService extends ChangeNotifier {
           item.durationSeconds = meta.duration.inMilliseconds / 1000.0;
         }
       } else {
-        // MP4: extract first frame
+        // Video input (MP4, MKV, WebM, AVI, MOV, FLV, WMV, etc.): extract first frame
         final frameBytes = await FFmpegService.extractVideoFrame(
           videoPath: item.sourcePath,
           timestampSeconds: 0.0,
@@ -149,7 +177,10 @@ class BatchConversionService extends ChangeNotifier {
         if (frameBytes != null) {
           item.thumbnailBytes = frameBytes;
         }
-        item.title = p.basenameWithoutExtension(item.fileName);
+        final tags = await FFmpegService.readMediaTags(item.sourcePath);
+        item.title = tags['title']?.isNotEmpty == true ? tags['title']! : p.basenameWithoutExtension(item.fileName);
+        item.artist = tags['artist']?.isNotEmpty == true ? tags['artist']! : null;
+        item.album = tags['album']?.isNotEmpty == true ? tags['album']! : null;
         final dur = await FFmpegService.getMediaDuration(item.sourcePath);
         item.durationSeconds = dur;
       }
@@ -237,9 +268,11 @@ class BatchConversionService extends ChangeNotifier {
           .replaceAll('{name}', baseNameWithoutExt)
           .replaceAll('{title}', item.title ?? baseNameWithoutExt);
 
-      if (item.direction == ConversionDirection.mp3ToMp4) {
-        // Output MP4
-        final outPath = p.join(outDir, '$formattedName.mp4');
+      final targetExt = item.targetFormat.toLowerCase().replaceAll('.', '');
+
+      if (item.isAudioInput) {
+        // Output chosen video format (default MP4)
+        final outPath = p.join(outDir, '$formattedName.$targetExt');
         item.outputPath = outPath;
 
         // Image to use
@@ -276,10 +309,11 @@ class BatchConversionService extends ChangeNotifier {
           imageToUse = tempImg.path;
         }
 
-        final res = await FFmpegService.convertMp3ToMp4(
+        final res = await FFmpegService.convertMp3ToVideo(
           audioPath: item.sourcePath,
           imagePath: imageToUse,
           outputPath: outPath,
+          targetFormat: targetExt,
           resolution: item.resolutionOverride ?? settings.defaultResolution,
           videoBitrate: item.videoBitrateOverride ?? settings.defaultVideoBitrate,
           audioBitrate: item.audioBitrateOverride ?? settings.defaultAudioBitrate,
@@ -305,12 +339,12 @@ class BatchConversionService extends ChangeNotifier {
           item.status = ConversionStatus.failed;
           item.errorMessage = res.errorMessage;
         }
-      } else {
-        // Output MP3
+      } else if (item.isTargetAudio) {
+        // Output MP3 (Audio Extraction from video)
         final outPath = p.join(outDir, '$formattedName.mp3');
         item.outputPath = outPath;
 
-        final res = await FFmpegService.convertMp4ToMp3(
+        final res = await FFmpegService.convertVideoToMp3(
           videoPath: item.sourcePath,
           outputPath: outPath,
           audioBitrate: item.audioBitrateOverride ?? settings.defaultAudioBitrate,
@@ -347,6 +381,33 @@ class BatchConversionService extends ChangeNotifier {
             );
           }
 
+          item.status = ConversionStatus.completed;
+          item.progress = 1.0;
+        } else {
+          item.status = ConversionStatus.failed;
+          item.errorMessage = res.errorMessage;
+        }
+      } else {
+        // Output specific video format (Video -> Video transcoding, e.g. MKV -> MP4, WebM -> AVI, etc.)
+        final outPath = p.join(outDir, '$formattedName.$targetExt');
+        item.outputPath = outPath;
+
+        final res = await FFmpegService.convertVideoToVideo(
+          videoPath: item.sourcePath,
+          outputPath: outPath,
+          targetFormat: targetExt,
+          resolution: item.resolutionOverride ?? settings.defaultResolution,
+          videoBitrate: item.videoBitrateOverride ?? settings.defaultVideoBitrate,
+          audioBitrate: item.audioBitrateOverride ?? settings.defaultAudioBitrate,
+          hardwareAcceleration: settings.hardwareAcceleration,
+          onProgress: (prog) {
+            item.progress = prog;
+            notifyListeners();
+          },
+          cancelCompleter: cancelCompleter,
+        );
+
+        if (res.success) {
           item.status = ConversionStatus.completed;
           item.progress = 1.0;
         } else {

@@ -51,6 +51,20 @@ class FFmpegProgressInfo {
   });
 }
 
+class VideoCodecConfig {
+  final List<String> videoEncoderArgs;
+  final List<String> audioEncoderArgs;
+  final List<String> extraArgs;
+  final String containerFormat;
+
+  VideoCodecConfig({
+    required this.videoEncoderArgs,
+    required this.audioEncoderArgs,
+    this.extraArgs = const [],
+    required this.containerFormat,
+  });
+}
+
 class FFmpegService {
   static bool? _isFFmpegAvailableCached;
   static HwAccelInfo? _cachedHwAccel;
@@ -424,12 +438,136 @@ class FFmpegService {
     return null;
   }
 
-  /// Convert MP3 -> MP4
-  /// Optimized for extreme speed with GPU hardware acceleration or CPU multi-threading
-  static Future<FFmpegResult> convertMp3ToMp4({
+  /// Unified codec and container configuration builder sitting in one place for
+  /// both static-image cover-to-video and video-to-video conversions.
+  static Future<VideoCodecConfig> getCodecConfigForFormat({
+    required String targetFormat,
+    required String videoBitrate,
+    required String audioBitrate,
+    required String hardwareAcceleration,
+    bool isStaticImage = false,
+  }) async {
+    final fmt = targetFormat.toLowerCase().replaceAll('.', '');
+    final hw = await detectHardwareAcceleration();
+    final useNvenc = (hardwareAcceleration == 'auto' && hw.hasNvenc) || hardwareAcceleration == 'nvenc';
+    final useVaapi = (hardwareAcceleration == 'auto' && !hw.hasNvenc && hw.hasVaapi) || hardwareAcceleration == 'vaapi';
+
+    switch (fmt) {
+      case 'webm':
+        return VideoCodecConfig(
+          containerFormat: 'webm',
+          videoEncoderArgs: [
+            '-c:v', 'libvpx-vp9',
+            '-b:v', videoBitrate,
+            '-deadline', 'realtime',
+            '-cpu-used', '8',
+          ],
+          audioEncoderArgs: [
+            '-c:a', 'libopus',
+            '-b:a', audioBitrate,
+          ],
+          extraArgs: ['-pix_fmt', 'yuv420p'],
+        );
+
+      case 'avi':
+        return VideoCodecConfig(
+          containerFormat: 'avi',
+          videoEncoderArgs: [
+            '-c:v', 'mpeg4',
+            '-vtag', 'XVID',
+            '-b:v', videoBitrate,
+          ],
+          audioEncoderArgs: [
+            '-c:a', 'libmp3lame',
+            '-b:a', audioBitrate,
+          ],
+          extraArgs: ['-pix_fmt', 'yuv420p'],
+        );
+
+      case 'wmv':
+        return VideoCodecConfig(
+          containerFormat: 'asf',
+          videoEncoderArgs: [
+            '-c:v', 'wmv2',
+            '-b:v', videoBitrate,
+          ],
+          audioEncoderArgs: [
+            '-c:a', 'wmav2',
+            '-b:a', audioBitrate,
+          ],
+          extraArgs: ['-pix_fmt', 'yuv420p'],
+        );
+
+      case 'flv':
+        return VideoCodecConfig(
+          containerFormat: 'flv',
+          videoEncoderArgs: [
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            if (isStaticImage) ...['-tune', 'stillimage'],
+            '-threads', '0',
+            '-b:v', videoBitrate,
+          ],
+          audioEncoderArgs: [
+            '-c:a', 'aac',
+            '-b:a', audioBitrate,
+          ],
+          extraArgs: ['-pix_fmt', 'yuv420p'],
+        );
+
+      case 'mkv':
+      case 'mov':
+      case 'mp4':
+      default:
+        final List<String> vArgs = [];
+        final List<String> extras = ['-pix_fmt', 'yuv420p'];
+
+        if (useNvenc) {
+          vArgs.addAll([
+            '-c:v', 'h264_nvenc',
+            '-preset', 'p1',
+            '-tune', 'ull',
+            '-b:v', videoBitrate,
+          ]);
+        } else if (useVaapi) {
+          extras.addAll(['-vaapi_device', '/dev/dri/renderD128']);
+          vArgs.addAll([
+            '-vf', 'format=nv12,hwupload',
+            '-c:v', 'h264_vaapi',
+            '-b:v', videoBitrate,
+          ]);
+        } else {
+          vArgs.addAll([
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            if (isStaticImage) ...['-tune', 'stillimage'],
+            '-threads', '0',
+            '-b:v', videoBitrate,
+          ]);
+        }
+
+        String container = fmt;
+        if (fmt == 'mkv') container = 'matroska';
+
+        return VideoCodecConfig(
+          containerFormat: container,
+          videoEncoderArgs: vArgs,
+          audioEncoderArgs: [
+            '-c:a', 'aac',
+            '-b:a', audioBitrate,
+          ],
+          extraArgs: extras,
+        );
+    }
+  }
+
+  /// Convert Audio -> Video (Cover-to-video)
+  /// Works with any target video format (MP4, MKV, WebM, MOV, AVI, FLV, WMV)
+  static Future<FFmpegResult> convertMp3ToVideo({
     required String audioPath,
     required String imagePath,
     required String outputPath,
+    String targetFormat = 'mp4',
     String resolution = '1920x1080',
     String videoBitrate = '5000k',
     String audioBitrate = '320k',
@@ -445,38 +583,15 @@ class FFmpegService {
     }
 
     final durationSec = await getMediaDuration(audioPath) ?? 180.0;
+    final codecConfig = await getCodecConfigForFormat(
+      targetFormat: targetFormat,
+      videoBitrate: videoBitrate,
+      audioBitrate: audioBitrate,
+      hardwareAcceleration: hardwareAcceleration,
+      isStaticImage: true,
+    );
 
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      final hw = await detectHardwareAcceleration();
-      final useNvenc = (hardwareAcceleration == 'auto' && hw.hasNvenc) || hardwareAcceleration == 'nvenc';
-      final useVaapi = (hardwareAcceleration == 'auto' && !hw.hasNvenc && hw.hasVaapi) || hardwareAcceleration == 'vaapi';
-
-      final List<String> encoderArgs = [];
-      if (useNvenc) {
-        encoderArgs.addAll([
-          '-c:v', 'h264_nvenc',
-          '-preset', 'p1',
-          '-tune', 'ull',
-          '-b:v', videoBitrate,
-        ]);
-      } else if (useVaapi) {
-        encoderArgs.addAll([
-          '-vaapi_device', '/dev/dri/renderD128',
-          '-vf', 'format=nv12,hwupload',
-          '-c:v', 'h264_vaapi',
-          '-b:v', videoBitrate,
-        ]);
-      } else {
-        // High-speed CPU encoding with multi-threading
-        encoderArgs.addAll([
-          '-c:v', 'libx264',
-          '-preset', 'ultrafast',
-          '-tune', 'stillimage',
-          '-threads', '0',
-          '-b:v', videoBitrate,
-        ]);
-      }
-
       final desktopArgs = [
         '-y',
         '-threads', '0',
@@ -486,11 +601,10 @@ class FFmpegService {
         '-i', audioPath,
         '-map', '0:v:0',
         '-map', '1:a:0',
-        ...encoderArgs,
-        '-c:a', 'aac',
-        '-b:a', audioBitrate,
+        ...codecConfig.extraArgs,
+        ...codecConfig.videoEncoderArgs,
+        ...codecConfig.audioEncoderArgs,
         '-s', resolution,
-        '-pix_fmt', 'yuv420p',
         '-r', '2',
         '-shortest',
         outputPath,
@@ -504,9 +618,26 @@ class FFmpegService {
         cancelCompleter: cancelCompleter,
       );
     } else {
+      final cmd = [
+        '-y',
+        '-threads', '0',
+        '-loop', '1',
+        '-framerate', '2',
+        '-i', '"$imagePath"',
+        '-i', '"$audioPath"',
+        '-map', '0:v:0',
+        '-map', '1:a:0',
+        ...codecConfig.extraArgs,
+        ...codecConfig.videoEncoderArgs,
+        ...codecConfig.audioEncoderArgs,
+        '-s', resolution,
+        '-r', '2',
+        '-shortest',
+        '"$outputPath"',
+      ].join(' ');
+
       return _runMobileConversion(
-        command:
-            '-y -threads 0 -loop 1 -framerate 2 -i "$imagePath" -i "$audioPath" -map 0:v:0 -map 1:a:0 -c:v libx264 -preset ultrafast -tune stillimage -c:a aac -b:a $audioBitrate -b:v $videoBitrate -s $resolution -pix_fmt yuv420p -r 2 -shortest "$outputPath"',
+        command: cmd,
         totalDurationSeconds: durationSec,
         outputPath: outputPath,
         onProgress: onProgress,
@@ -515,9 +646,107 @@ class FFmpegService {
     }
   }
 
-  /// Convert MP4 -> MP3
-  /// Extract audio track to MP3 with multi-threading and direct stream copy if already mp3
-  static Future<FFmpegResult> convertMp4ToMp3({
+  /// Backward-compatible alias for convertMp3ToVideo defaulting to 'mp4'
+  static Future<FFmpegResult> convertMp3ToMp4({
+    required String audioPath,
+    required String imagePath,
+    required String outputPath,
+    String resolution = '1920x1080',
+    String videoBitrate = '5000k',
+    String audioBitrate = '320k',
+    String hardwareAcceleration = 'auto',
+    void Function(double progress)? onProgress,
+    Completer<void>? cancelCompleter,
+  }) {
+    return convertMp3ToVideo(
+      audioPath: audioPath,
+      imagePath: imagePath,
+      outputPath: outputPath,
+      targetFormat: 'mp4',
+      resolution: resolution,
+      videoBitrate: videoBitrate,
+      audioBitrate: audioBitrate,
+      hardwareAcceleration: hardwareAcceleration,
+      onProgress: onProgress,
+      cancelCompleter: cancelCompleter,
+    );
+  }
+
+  /// Convert any input video (MP4, MKV, WebM, AVI, MOV, FLV, WMV) to any target video format
+  static Future<FFmpegResult> convertVideoToVideo({
+    required String videoPath,
+    required String outputPath,
+    required String targetFormat,
+    String resolution = '1920x1080',
+    String videoBitrate = '5000k',
+    String audioBitrate = '320k',
+    String hardwareAcceleration = 'auto',
+    void Function(double progress)? onProgress,
+    Completer<void>? cancelCompleter,
+  }) async {
+    if (kIsWeb) {
+      return FFmpegResult(
+        success: false,
+        errorMessage: 'Web platform does not support local FFmpeg encoding.',
+      );
+    }
+
+    final durationSec = await getMediaDuration(videoPath) ?? 180.0;
+    final codecConfig = await getCodecConfigForFormat(
+      targetFormat: targetFormat,
+      videoBitrate: videoBitrate,
+      audioBitrate: audioBitrate,
+      hardwareAcceleration: hardwareAcceleration,
+      isStaticImage: false,
+    );
+
+    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+      final desktopArgs = [
+        '-y',
+        '-threads', '0',
+        '-i', videoPath,
+        '-map', '0:v:0',
+        '-map', '0:a?',
+        ...codecConfig.extraArgs,
+        ...codecConfig.videoEncoderArgs,
+        ...codecConfig.audioEncoderArgs,
+        '-s', resolution,
+        outputPath,
+      ];
+
+      return _runDesktopConversion(
+        args: desktopArgs,
+        totalDurationSeconds: durationSec,
+        outputPath: outputPath,
+        onProgress: onProgress,
+        cancelCompleter: cancelCompleter,
+      );
+    } else {
+      final cmd = [
+        '-y',
+        '-threads', '0',
+        '-i', '"$videoPath"',
+        '-map', '0:v:0',
+        '-map', '0:a?',
+        ...codecConfig.extraArgs,
+        ...codecConfig.videoEncoderArgs,
+        ...codecConfig.audioEncoderArgs,
+        '-s', resolution,
+        '"$outputPath"',
+      ].join(' ');
+
+      return _runMobileConversion(
+        command: cmd,
+        totalDurationSeconds: durationSec,
+        outputPath: outputPath,
+        onProgress: onProgress,
+        cancelCompleter: cancelCompleter,
+      );
+    }
+  }
+
+  /// Convert any input video (MP4, MKV, WebM, AVI, MOV, FLV, WMV) to MP3 audio
+  static Future<FFmpegResult> convertVideoToMp3({
     required String videoPath,
     required String outputPath,
     String audioBitrate = '320k',
@@ -585,6 +814,24 @@ class FFmpegService {
       );
     }
   }
+
+  /// Backward-compatible alias for convertVideoToMp3
+  static Future<FFmpegResult> convertMp4ToMp3({
+    required String videoPath,
+    required String outputPath,
+    String audioBitrate = '320k',
+    void Function(double progress)? onProgress,
+    Completer<void>? cancelCompleter,
+  }) {
+    return convertVideoToMp3(
+      videoPath: videoPath,
+      outputPath: outputPath,
+      audioBitrate: audioBitrate,
+      onProgress: onProgress,
+      cancelCompleter: cancelCompleter,
+    );
+  }
+
 
   /// Desktop runner streaming progress
   static Future<FFmpegResult> _runDesktopConversion({
