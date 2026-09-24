@@ -624,6 +624,8 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
                     items: [
                       DropdownMenuItem(value: 'auto', child: Text(l10n.tr('hwAccelAuto'), style: const TextStyle(fontSize: 12))),
                       DropdownMenuItem(value: 'nvenc', child: Text(l10n.tr('hwAccelNvenc'), style: const TextStyle(fontSize: 12))),
+                      DropdownMenuItem(value: 'qsv', child: Text(l10n.tr('hwAccelQsv'), style: const TextStyle(fontSize: 12))),
+                      DropdownMenuItem(value: 'videotoolbox', child: Text(l10n.tr('hwAccelVideoToolbox'), style: const TextStyle(fontSize: 12))),
                       DropdownMenuItem(value: 'vaapi', child: Text(l10n.tr('hwAccelVaapi'), style: const TextStyle(fontSize: 12))),
                       DropdownMenuItem(value: 'cpu_ultrafast', child: Text(l10n.tr('hwAccelCpuUltrafast'), style: const TextStyle(fontSize: 12))),
                     ],
@@ -715,7 +717,10 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
                   DropdownButtonFormField<String>(
                     value: _projectSettings.defaultResolution,
                     items: ConversionSettings.availableResolutions.map((res) {
-                      return DropdownMenuItem(value: res, child: Text(res));
+                      return DropdownMenuItem(
+                        value: res,
+                        child: Text(res == 'original' ? l10n.tr('resOriginal') : res),
+                      );
                     }).toList(),
                     onChanged: (val) {
                       if (val != null) {
@@ -731,7 +736,10 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
                   DropdownButtonFormField<String>(
                     value: _projectSettings.defaultVideoBitrate,
                     items: ConversionSettings.availableVideoBitrates.map((br) {
-                      return DropdownMenuItem(value: br, child: Text(br));
+                      return DropdownMenuItem(
+                        value: br,
+                        child: Text(br == 'auto' ? l10n.tr('bitrateAuto') : br),
+                      );
                     }).toList(),
                     onChanged: (val) {
                       if (val != null) {
@@ -747,7 +755,10 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
                   DropdownButtonFormField<String>(
                     value: _projectSettings.defaultAudioBitrate,
                     items: ConversionSettings.availableAudioBitrates.map((br) {
-                      return DropdownMenuItem(value: br, child: Text(br));
+                      return DropdownMenuItem(
+                        value: br,
+                        child: Text(br == 'auto' ? l10n.tr('audioBitrateAuto') : br),
+                      );
                     }).toList(),
                     onChanged: (val) {
                       if (val != null) {

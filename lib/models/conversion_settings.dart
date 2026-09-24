@@ -1,5 +1,6 @@
 class ConversionSettings {
   static const List<String> availableResolutions = [
+    'original',  // Source resolution (no upscaling)
     '1920x1080', // 1080p (16:9)
     '1280x720',  // 720p (16:9)
     '1080x1080', // Square (1:1)
@@ -8,6 +9,8 @@ class ConversionSettings {
   ];
 
   static const List<String> availableVideoBitrates = [
+    'auto',
+    '1000k',
     '2500k',
     '5000k',
     '8000k',
@@ -15,6 +18,7 @@ class ConversionSettings {
   ];
 
   static const List<String> availableAudioBitrates = [
+    'auto',
     '128k',
     '192k',
     '256k',
@@ -25,6 +29,8 @@ class ConversionSettings {
     'auto',
     'nvenc',
     'vaapi',
+    'qsv',
+    'videotoolbox',
     'cpu_ultrafast',
   ];
 
@@ -69,9 +75,9 @@ class ConversionSettings {
   String filenamePattern;
 
   ConversionSettings({
-    this.defaultResolution = '1920x1080',
-    this.defaultVideoBitrate = '5000k',
-    this.defaultAudioBitrate = '320k',
+    this.defaultResolution = 'original',
+    this.defaultVideoBitrate = 'auto',
+    this.defaultAudioBitrate = 'auto',
     this.hardwareAcceleration = 'auto',
     this.defaultVideoOutputFormat = 'mp4',
     this.outputFolder,

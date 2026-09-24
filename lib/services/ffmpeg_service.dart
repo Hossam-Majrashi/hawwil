@@ -65,6 +65,30 @@ class VideoCodecConfig {
   });
 }
 
+class MediaInfo {
+  final int? width;
+  final int? height;
+  final double? fps;
+  final int? videoBitrateKbps;
+  final int? audioBitrateKbps;
+  final int? audioSampleRate;
+  final int? audioChannels;
+  final int? totalBitrateKbps;
+  final double? durationSeconds;
+
+  const MediaInfo({
+    this.width,
+    this.height,
+    this.fps,
+    this.videoBitrateKbps,
+    this.audioBitrateKbps,
+    this.audioSampleRate,
+    this.audioChannels,
+    this.totalBitrateKbps,
+    this.durationSeconds,
+  });
+}
+
 class FFmpegService {
   static bool? _isFFmpegAvailableCached;
   static HwAccelInfo? _cachedHwAccel;
@@ -475,110 +499,537 @@ class FFmpegService {
     return false;
   }
 
+  /// Probe media streams for resolution, bitrates, and duration
+  static Future<MediaInfo> probeMedia(String filePath) async {
+    if (kIsWeb) return const MediaInfo();
+
+    try {
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        final probe = await Process.run('ffprobe', [
+          '-v', 'error',
+          '-show_entries', 'stream=index,codec_type,width,height,bit_rate,r_frame_rate,avg_frame_rate,sample_rate,channels',
+          '-show_entries', 'format=bit_rate,duration,size',
+          '-of', 'json',
+          filePath,
+        ]);
+
+        if (probe.exitCode == 0) {
+          final parsed = jsonDecode(probe.stdout.toString());
+          if (parsed is Map) {
+            int? width;
+            int? height;
+            double? fps;
+            int? videoBitrate;
+            int? audioBitrate;
+            int? audioSampleRate;
+            int? audioChannels;
+            int? totalBitrate;
+            double? duration;
+
+            if (parsed['format'] is Map) {
+              final fmt = parsed['format'] as Map;
+              final fmtBr = int.tryParse(fmt['bit_rate']?.toString() ?? '');
+              if (fmtBr != null && fmtBr > 0) {
+                totalBitrate = (fmtBr / 1000).round();
+              }
+              final dur = double.tryParse(fmt['duration']?.toString() ?? '');
+              if (dur != null && dur > 0) {
+                duration = dur;
+              }
+              final size = int.tryParse(fmt['size']?.toString() ?? '');
+              if (totalBitrate == null && size != null && duration != null && duration > 0) {
+                totalBitrate = ((size * 8) / (duration * 1000)).round();
+              }
+            }
+
+            if (parsed['streams'] is List) {
+              for (final s in parsed['streams'] as List) {
+                if (s is Map) {
+                  final cType = s['codec_type']?.toString();
+                  if (cType == 'video' && width == null) {
+                    width = int.tryParse(s['width']?.toString() ?? '');
+                    height = int.tryParse(s['height']?.toString() ?? '');
+                    final vBr = int.tryParse(s['bit_rate']?.toString() ?? '');
+                    if (vBr != null && vBr > 0) {
+                      videoBitrate = (vBr / 1000).round();
+                    }
+                    final rFps = s['r_frame_rate']?.toString();
+                    final aFps = s['avg_frame_rate']?.toString();
+                    fps = _parseFpsString(rFps) ?? _parseFpsString(aFps);
+                  } else if (cType == 'audio') {
+                    if (audioBitrate == null) {
+                      final aBr = int.tryParse(s['bit_rate']?.toString() ?? '');
+                      if (aBr != null && aBr > 0) {
+                        audioBitrate = (aBr / 1000).round();
+                      }
+                    }
+                    audioSampleRate ??= int.tryParse(s['sample_rate']?.toString() ?? '');
+                    audioChannels ??= int.tryParse(s['channels']?.toString() ?? '');
+                  }
+                }
+              }
+            }
+
+            if (videoBitrate == null && totalBitrate != null) {
+              final aBr = audioBitrate ?? 64;
+              videoBitrate = totalBitrate > aBr ? totalBitrate - aBr : totalBitrate;
+            }
+
+            if ((totalBitrate == null || totalBitrate <= 0) && duration != null && duration > 0) {
+              try {
+                final file = File(filePath);
+                if (await file.exists()) {
+                  final size = await file.length();
+                  totalBitrate = ((size * 8) / (duration * 1000)).round();
+                  videoBitrate ??= totalBitrate > 64 ? totalBitrate - 64 : totalBitrate;
+                }
+              } catch (_) {}
+            }
+
+            return MediaInfo(
+              width: width,
+              height: height,
+              fps: fps,
+              videoBitrateKbps: videoBitrate,
+              audioBitrateKbps: audioBitrate,
+              audioSampleRate: audioSampleRate,
+              audioChannels: audioChannels,
+              totalBitrateKbps: totalBitrate,
+              durationSeconds: duration,
+            );
+          }
+        }
+      } else if (Platform.isAndroid || Platform.isIOS) {
+        final session = await FFmpegKit.execute('-i "$filePath"');
+        final logs = await session.getAllLogsAsString() ?? '';
+        return _parseMediaInfoFromLogs(logs, filePath);
+      }
+    } catch (e) {
+      debugPrint('probeMedia error: $e');
+    }
+    return const MediaInfo();
+  }
+
+  static double? _parseFpsString(String? str) {
+    if (str == null || str.isEmpty) return null;
+    final parts = str.split('/');
+    if (parts.length == 2) {
+      final num = double.tryParse(parts[0]);
+      final den = double.tryParse(parts[1]);
+      if (num != null && den != null && den > 0 && num > 0) {
+        final val = num / den;
+        if (!val.isNaN && !val.isInfinite && val > 0) return val;
+      }
+    } else {
+      final val = double.tryParse(str);
+      if (val != null && !val.isNaN && !val.isInfinite && val > 0) return val;
+    }
+    return null;
+  }
+
+  static MediaInfo _parseMediaInfoFromLogs(String logs, String filePath) {
+    int? width;
+    int? height;
+    double? fps;
+    int? videoBitrate;
+    int? audioBitrate;
+    int? audioSampleRate;
+    int? audioChannels;
+    int? totalBitrate;
+    double? duration;
+
+    final durMatch = RegExp(r'Duration:\s*(\d+):(\d+):(\d+\.\d+)').firstMatch(logs);
+    if (durMatch != null) {
+      final hours = int.tryParse(durMatch.group(1) ?? '0') ?? 0;
+      final minutes = int.tryParse(durMatch.group(2) ?? '0') ?? 0;
+      final seconds = double.tryParse(durMatch.group(3) ?? '0') ?? 0.0;
+      duration = (hours * 3600) + (minutes * 60) + seconds;
+    }
+
+    final brMatch = RegExp(r'bitrate:\s*(\d+)\s*kb/s').firstMatch(logs);
+    if (brMatch != null) {
+      totalBitrate = int.tryParse(brMatch.group(1) ?? '');
+    }
+
+    final vidMatch = RegExp(r'Stream #\d+:\d+.*Video:.*?(\d{2,5})x(\d{2,5})').firstMatch(logs);
+    if (vidMatch != null) {
+      width = int.tryParse(vidMatch.group(1) ?? '');
+      height = int.tryParse(vidMatch.group(2) ?? '');
+    }
+
+    final fpsMatch = RegExp(r'(\d+(?:\.\d+)?)\s*(?:fps|tbr)').firstMatch(logs);
+    if (fpsMatch != null) {
+      fps = double.tryParse(fpsMatch.group(1) ?? '');
+    }
+
+    final vidBrMatch = RegExp(r'Stream #\d+:\d+.*Video:.*?(\d+)\s*kb/s').firstMatch(logs);
+    if (vidBrMatch != null) {
+      videoBitrate = int.tryParse(vidBrMatch.group(1) ?? '');
+    }
+
+    final audBrMatch = RegExp(r'Stream #\d+:\d+.*Audio:.*?(\d+)\s*kb/s').firstMatch(logs);
+    if (audBrMatch != null) {
+      audioBitrate = int.tryParse(audBrMatch.group(1) ?? '');
+    }
+
+    final srMatch = RegExp(r'Audio:.*?(\d{4,6})\s*Hz').firstMatch(logs);
+    if (srMatch != null) {
+      audioSampleRate = int.tryParse(srMatch.group(1) ?? '');
+    }
+
+    final chMatch = RegExp(r'Audio:.*?(mono|stereo|\d+(?:\.\d+)?\s*channels?)').firstMatch(logs);
+    if (chMatch != null) {
+      final chStr = chMatch.group(1)!.toLowerCase();
+      if (chStr.contains('mono')) {
+        audioChannels = 1;
+      } else if (chStr.contains('stereo')) {
+        audioChannels = 2;
+      } else {
+        audioChannels = int.tryParse(RegExp(r'\d+').firstMatch(chStr)?.group(0) ?? '');
+      }
+    }
+
+    if (totalBitrate == null && duration != null && duration > 0) {
+      try {
+        final f = File(filePath);
+        if (f.existsSync()) {
+          final size = f.lengthSync();
+          totalBitrate = ((size * 8) / (duration * 1000)).round();
+        }
+      } catch (_) {}
+    }
+
+    if (videoBitrate == null && totalBitrate != null) {
+      final aBr = audioBitrate ?? 64;
+      videoBitrate = totalBitrate > aBr ? totalBitrate - aBr : totalBitrate;
+    }
+
+    return MediaInfo(
+      width: width,
+      height: height,
+      fps: fps,
+      videoBitrateKbps: videoBitrate,
+      audioBitrateKbps: audioBitrate,
+      audioSampleRate: audioSampleRate,
+      audioChannels: audioChannels,
+      totalBitrateKbps: totalBitrate,
+      durationSeconds: duration,
+    );
+  }
+
+  /// Calculates a generous safety cap sized to the source's resolution and framerate
+  /// so complex scenes are never starved below CRF 23, while preventing runaway file size
+  /// on extreme high-motion/high-resolution sources.
+  static int calculateBitrateCap({
+    required MediaInfo info,
+    int? targetWidth,
+    int? targetHeight,
+    double? targetFps,
+  }) {
+    final w = targetWidth ?? info.width ?? 1280;
+    final h = targetHeight ?? info.height ?? 720;
+    final pixels = w * h;
+
+    final fps = (targetFps ?? info.fps ?? 30.0).clamp(15.0, 120.0);
+    final fpsFactor = fps / 30.0;
+
+    int baseCapAt30fps;
+    if (pixels <= 320 * 240) {
+      baseCapAt30fps = 1500;
+    } else if (pixels <= 640 * 360) {
+      baseCapAt30fps = 3000;
+    } else if (pixels <= 854 * 480) {
+      baseCapAt30fps = 5000;
+    } else if (pixels <= 1280 * 720) {
+      baseCapAt30fps = 10000;
+    } else if (pixels <= 1920 * 1080) {
+      baseCapAt30fps = 20000;
+    } else {
+      // 4K and above
+      baseCapAt30fps = 50000;
+    }
+
+    return (baseCapAt30fps * fpsFactor).round();
+  }
+
+  /// Builds quality-based (VBR) audio arguments avoiding fixed CBR bitrates,
+  /// preserving source sample rate and channel count without wasteful upsampling.
+  static List<String> buildAudioEncoderArgs({
+    required String targetFormat,
+    String? audioBitrate,
+    int? sourceSampleRate,
+    int? sourceChannels,
+  }) {
+    final fmt = targetFormat.toLowerCase().replaceAll('.', '');
+    final isAuto = audioBitrate == null || audioBitrate == 'auto' || audioBitrate.isEmpty;
+    final explicitKbps = !isAuto ? audioBitrate : null;
+
+    final List<String> aArgs = [];
+
+    switch (fmt) {
+      case 'wav':
+        aArgs.addAll(['-c:a', 'pcm_s16le']);
+        break;
+
+      case 'flac':
+        aArgs.addAll(['-c:a', 'flac']);
+        break;
+
+      case 'ogg':
+      case 'vorbis':
+        if (isAuto) {
+          aArgs.addAll(['-c:a', 'libvorbis', '-q:a', '5']);
+        } else {
+          aArgs.addAll(['-c:a', 'libvorbis', '-b:a', explicitKbps!]);
+        }
+        break;
+
+      case 'opus':
+        if (isAuto) {
+          aArgs.addAll(['-c:a', 'libopus', '-b:a', '128k', '-vbr', 'on']);
+        } else {
+          aArgs.addAll(['-c:a', 'libopus', '-b:a', explicitKbps!, '-vbr', 'on']);
+        }
+        break;
+
+      case 'wmv':
+      case 'asf':
+      case 'wma':
+      case 'wmav2':
+        if (isAuto) {
+          aArgs.addAll(['-c:a', 'wmav2', '-b:a', '160k']);
+        } else {
+          aArgs.addAll(['-c:a', 'wmav2', '-b:a', explicitKbps!]);
+        }
+        break;
+
+      case 'mpg':
+      case 'mpeg':
+      case 'mp2':
+        if (isAuto) {
+          aArgs.addAll(['-c:a', 'mp2', '-b:a', '192k']);
+        } else {
+          aArgs.addAll(['-c:a', 'mp2', '-b:a', explicitKbps!]);
+        }
+        break;
+
+      case 'aac':
+      case 'm4a':
+      case 'flv':
+      case 'mp4':
+      case 'mkv':
+      case 'mov':
+        if (isAuto) {
+          aArgs.addAll(['-c:a', 'aac', '-q:a', '2']);
+        } else {
+          aArgs.addAll(['-c:a', 'aac', '-b:a', explicitKbps!]);
+        }
+        break;
+
+      case 'mp3':
+      case 'avi':
+      default:
+        if (isAuto) {
+          aArgs.addAll(['-c:a', 'libmp3lame', '-q:a', '2']);
+        } else {
+          aArgs.addAll(['-c:a', 'libmp3lame', '-b:a', explicitKbps!]);
+        }
+        break;
+    }
+
+    // Never upsample channels: if source is mono, keep mono; if stereo, keep stereo.
+    if (sourceChannels != null && sourceChannels > 0) {
+      aArgs.addAll(['-ac', '$sourceChannels']);
+    }
+
+    // Never upsample sample rate beyond what source actually has.
+    if (sourceSampleRate != null && sourceSampleRate > 0) {
+      if (fmt == 'opus') {
+        const supportedOpusRates = [8000, 12000, 16000, 24000, 48000];
+        if (supportedOpusRates.contains(sourceSampleRate)) {
+          aArgs.addAll(['-ar', '$sourceSampleRate']);
+        }
+      } else {
+        aArgs.addAll(['-ar', '$sourceSampleRate']);
+      }
+    }
+
+    return aArgs;
+  }
+
   /// Unified codec and container configuration builder sitting in one place for
   /// both static-image cover-to-video and video-to-video conversions.
   static Future<VideoCodecConfig> getCodecConfigForFormat({
     required String targetFormat,
-    required String videoBitrate,
-    required String audioBitrate,
+    String? videoBitrate,
+    String? audioBitrate,
     required String hardwareAcceleration,
     bool isStaticImage = false,
+    int? maxRateKbps,
+    int? audioSampleRate,
+    int? audioChannels,
   }) async {
     final fmt = targetFormat.toLowerCase().replaceAll('.', '');
     final hw = await detectHardwareAcceleration();
     final useNvenc = (hardwareAcceleration == 'auto' && hw.hasNvenc) || hardwareAcceleration == 'nvenc';
     final useVaapi = (hardwareAcceleration == 'auto' && !hw.hasNvenc && hw.hasVaapi) || hardwareAcceleration == 'vaapi';
+    final useQsv = (hardwareAcceleration == 'auto' && !hw.hasNvenc && !hw.hasVaapi && hw.hasQsv) || hardwareAcceleration == 'qsv';
+    final useVideoToolbox = (hardwareAcceleration == 'auto' && !hw.hasNvenc && !hw.hasVaapi && !hw.hasQsv && hw.hasVideoToolbox && Platform.isMacOS) || hardwareAcceleration == 'videotoolbox';
+
+    int? requestedKbps;
+    if (videoBitrate != null && videoBitrate != 'auto' && videoBitrate.isNotEmpty) {
+      requestedKbps = int.tryParse(videoBitrate.replaceAll(RegExp(r'[^0-9]'), ''));
+    }
+
+    final capStr = maxRateKbps != null ? '${maxRateKbps}k' : null;
+    final bufStr = maxRateKbps != null ? '${maxRateKbps * 2}k' : null;
 
     switch (fmt) {
       case 'webm':
+        final List<String> vArgs = [
+          '-c:v', 'libvpx-vp9',
+          '-deadline', 'realtime',
+          '-cpu-used', '8',
+        ];
+        if (requestedKbps != null) {
+          vArgs.addAll(['-b:v', '${requestedKbps}k']);
+        } else {
+          vArgs.addAll(['-b:v', '0', '-crf', '31']);
+          if (capStr != null) {
+            vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
+          }
+        }
         return VideoCodecConfig(
           containerFormat: 'webm',
-          videoEncoderArgs: [
-            '-c:v', 'libvpx-vp9',
-            '-b:v', videoBitrate,
-            '-deadline', 'realtime',
-            '-cpu-used', '8',
-          ],
-          audioEncoderArgs: [
-            '-c:a', 'libopus',
-            '-b:a', audioBitrate,
-          ],
+          videoEncoderArgs: vArgs,
+          audioEncoderArgs: buildAudioEncoderArgs(
+            targetFormat: 'opus',
+            audioBitrate: audioBitrate,
+            sourceSampleRate: audioSampleRate,
+            sourceChannels: audioChannels,
+          ),
           extraArgs: ['-pix_fmt', 'yuv420p'],
         );
 
       case 'avi':
+        final List<String> vArgs = [
+          '-c:v', 'mpeg4',
+          '-vtag', 'XVID',
+        ];
+        if (requestedKbps != null) {
+          vArgs.addAll(['-b:v', '${requestedKbps}k']);
+        } else {
+          vArgs.addAll(['-q:v', '4']);
+          if (capStr != null) {
+            vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
+          }
+        }
         return VideoCodecConfig(
           containerFormat: 'avi',
-          videoEncoderArgs: [
-            '-c:v', 'mpeg4',
-            '-vtag', 'XVID',
-            '-b:v', videoBitrate,
-          ],
-          audioEncoderArgs: [
-            '-c:a', 'libmp3lame',
-            '-b:a', audioBitrate,
-          ],
+          videoEncoderArgs: vArgs,
+          audioEncoderArgs: buildAudioEncoderArgs(
+            targetFormat: 'mp3',
+            audioBitrate: audioBitrate,
+            sourceSampleRate: audioSampleRate,
+            sourceChannels: audioChannels,
+          ),
           extraArgs: ['-pix_fmt', 'yuv420p'],
         );
 
       case 'wmv':
+        final List<String> vArgs = [
+          '-c:v', 'wmv2',
+        ];
+        if (requestedKbps != null) {
+          vArgs.addAll(['-b:v', '${requestedKbps}k']);
+        } else {
+          vArgs.addAll(['-q:v', '4']);
+          if (capStr != null) {
+            vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
+          }
+        }
         return VideoCodecConfig(
           containerFormat: 'asf',
-          videoEncoderArgs: [
-            '-c:v', 'wmv2',
-            '-b:v', videoBitrate,
-          ],
-          audioEncoderArgs: [
-            '-c:a', 'wmav2',
-            '-b:a', audioBitrate,
-          ],
+          videoEncoderArgs: vArgs,
+          audioEncoderArgs: buildAudioEncoderArgs(
+            targetFormat: 'wmv',
+            audioBitrate: audioBitrate,
+            sourceSampleRate: audioSampleRate,
+            sourceChannels: audioChannels,
+          ),
           extraArgs: ['-pix_fmt', 'yuv420p'],
         );
 
       case 'flv':
+        final List<String> vArgs = [
+          '-c:v', 'libx264',
+          '-preset', 'ultrafast',
+          if (isStaticImage) ...['-tune', 'stillimage'],
+          '-threads', '0',
+        ];
+        if (requestedKbps != null) {
+          vArgs.addAll(['-b:v', '${requestedKbps}k']);
+        } else {
+          vArgs.addAll(['-crf', '23']);
+          if (capStr != null) {
+            vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
+          }
+        }
         return VideoCodecConfig(
           containerFormat: 'flv',
-          videoEncoderArgs: [
-            '-c:v', 'libx264',
-            '-preset', 'ultrafast',
-            if (isStaticImage) ...['-tune', 'stillimage'],
-            '-threads', '0',
-            '-b:v', videoBitrate,
-          ],
-          audioEncoderArgs: [
-            '-c:a', 'aac',
-            '-b:a', audioBitrate,
-          ],
+          videoEncoderArgs: vArgs,
+          audioEncoderArgs: buildAudioEncoderArgs(
+            targetFormat: 'aac',
+            audioBitrate: audioBitrate,
+            sourceSampleRate: audioSampleRate,
+            sourceChannels: audioChannels,
+          ),
           extraArgs: ['-pix_fmt', 'yuv420p'],
         );
 
       case 'ogv':
+        final List<String> vArgs = [
+          '-c:v', 'libtheora',
+        ];
+        if (requestedKbps != null) {
+          vArgs.addAll(['-b:v', '${requestedKbps}k']);
+        } else {
+          vArgs.addAll(['-q:v', '6']);
+        }
         return VideoCodecConfig(
           containerFormat: 'ogg',
-          videoEncoderArgs: [
-            '-c:v', 'libtheora',
-            '-q:v', '7',
-            '-b:v', videoBitrate,
-          ],
-          audioEncoderArgs: [
-            '-c:a', 'libvorbis',
-            '-b:a', audioBitrate,
-          ],
+          videoEncoderArgs: vArgs,
+          audioEncoderArgs: buildAudioEncoderArgs(
+            targetFormat: 'ogg',
+            audioBitrate: audioBitrate,
+            sourceSampleRate: audioSampleRate,
+            sourceChannels: audioChannels,
+          ),
           extraArgs: ['-pix_fmt', 'yuv420p'],
         );
 
       case 'mpg':
       case 'mpeg':
+        final List<String> vArgs = [
+          '-c:v', 'mpeg2video',
+        ];
+        if (requestedKbps != null) {
+          vArgs.addAll(['-b:v', '${requestedKbps}k']);
+        } else {
+          vArgs.addAll(['-q:v', '4']);
+          if (capStr != null) {
+            vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
+          }
+        }
         return VideoCodecConfig(
           containerFormat: 'mpeg',
-          videoEncoderArgs: [
-            '-c:v', 'mpeg2video',
-            '-b:v', videoBitrate,
-          ],
-          audioEncoderArgs: [
-            '-c:a', 'mp2',
-            '-b:a', audioBitrate,
-          ],
+          videoEncoderArgs: vArgs,
+          audioEncoderArgs: buildAudioEncoderArgs(
+            targetFormat: 'mpg',
+            audioBitrate: audioBitrate,
+            sourceSampleRate: audioSampleRate,
+            sourceChannels: audioChannels,
+          ),
           extraArgs: ['-pix_fmt', 'yuv420p'],
         );
 
@@ -594,23 +1045,80 @@ class FFmpegService {
             '-c:v', 'h264_nvenc',
             '-preset', 'p1',
             '-tune', 'ull',
-            '-b:v', videoBitrate,
           ]);
+          if (requestedKbps != null) {
+            vArgs.addAll(['-b:v', '${requestedKbps}k']);
+          } else {
+            vArgs.addAll([
+              '-rc:v', 'vbr',
+              '-cq:v', '23',
+              '-b:v', '0',
+            ]);
+            if (capStr != null) {
+              vArgs.addAll(['-maxrate:v', capStr, '-bufsize:v', bufStr!]);
+            }
+          }
+        } else if (useQsv) {
+          vArgs.addAll([
+            '-c:v', 'h264_qsv',
+          ]);
+          if (requestedKbps != null) {
+            vArgs.addAll(['-b:v', '${requestedKbps}k']);
+          } else {
+            vArgs.addAll([
+              '-global_quality', '23',
+            ]);
+            if (capStr != null) {
+              vArgs.addAll(['-maxrate:v', capStr, '-bufsize:v', bufStr!]);
+            }
+          }
+        } else if (useVideoToolbox) {
+          vArgs.addAll([
+            '-c:v', 'h264_videotoolbox',
+          ]);
+          if (requestedKbps != null) {
+            vArgs.addAll(['-b:v', '${requestedKbps}k']);
+          } else {
+            vArgs.addAll([
+              '-q:v', '60',
+              '-b:v', '0',
+            ]);
+            if (capStr != null) {
+              vArgs.addAll(['-maxrate:v', capStr, '-bufsize:v', bufStr!]);
+            }
+          }
         } else if (useVaapi) {
           extras.addAll(['-vaapi_device', '/dev/dri/renderD128']);
           vArgs.addAll([
             '-vf', 'format=nv12,hwupload',
             '-c:v', 'h264_vaapi',
-            '-b:v', videoBitrate,
           ]);
+          if (requestedKbps != null) {
+            vArgs.addAll(['-b:v', '${requestedKbps}k']);
+          } else {
+            vArgs.addAll([
+              '-rc_mode', 'CQP',
+              '-qp', '23',
+            ]);
+            if (capStr != null) {
+              vArgs.addAll(['-maxrate', capStr]);
+            }
+          }
         } else {
           vArgs.addAll([
             '-c:v', 'libx264',
             '-preset', 'ultrafast',
             if (isStaticImage) ...['-tune', 'stillimage'],
             '-threads', '0',
-            '-b:v', videoBitrate,
           ]);
+          if (requestedKbps != null) {
+            vArgs.addAll(['-b:v', '${requestedKbps}k']);
+          } else {
+            vArgs.addAll(['-crf', '23']);
+            if (capStr != null) {
+              vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
+            }
+          }
         }
 
         String container = fmt;
@@ -619,10 +1127,12 @@ class FFmpegService {
         return VideoCodecConfig(
           containerFormat: container,
           videoEncoderArgs: vArgs,
-          audioEncoderArgs: [
-            '-c:a', 'aac',
-            '-b:a', audioBitrate,
-          ],
+          audioEncoderArgs: buildAudioEncoderArgs(
+            targetFormat: 'aac',
+            audioBitrate: audioBitrate,
+            sourceSampleRate: audioSampleRate,
+            sourceChannels: audioChannels,
+          ),
           extraArgs: extras,
         );
     }
@@ -635,9 +1145,9 @@ class FFmpegService {
     required String imagePath,
     required String outputPath,
     String targetFormat = 'mp4',
-    String resolution = '1920x1080',
-    String videoBitrate = '5000k',
-    String audioBitrate = '320k',
+    String? resolution,
+    String? videoBitrate,
+    String? audioBitrate,
     String hardwareAcceleration = 'auto',
     void Function(double progress)? onProgress,
     Completer<void>? cancelCompleter,
@@ -650,12 +1160,25 @@ class FFmpegService {
     }
 
     final durationSec = await getMediaDuration(audioPath) ?? 180.0;
+    final audioInfo = await probeMedia(audioPath);
+    final finalRes = (resolution == null || resolution == 'original' || resolution.isEmpty)
+        ? '1920x1080'
+        : resolution;
+
+    String? explicitAudioBitrate;
+    if (audioBitrate != null && audioBitrate != 'auto' && audioBitrate.isNotEmpty) {
+      explicitAudioBitrate = audioBitrate;
+    }
+
     final codecConfig = await getCodecConfigForFormat(
       targetFormat: targetFormat,
       videoBitrate: videoBitrate,
-      audioBitrate: audioBitrate,
+      audioBitrate: explicitAudioBitrate,
+      audioSampleRate: audioInfo.audioSampleRate,
+      audioChannels: audioInfo.audioChannels,
       hardwareAcceleration: hardwareAcceleration,
       isStaticImage: true,
+      maxRateKbps: null,
     );
 
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
@@ -671,7 +1194,7 @@ class FFmpegService {
         ...codecConfig.extraArgs,
         ...codecConfig.videoEncoderArgs,
         ...codecConfig.audioEncoderArgs,
-        '-s', resolution,
+        '-s', finalRes,
         '-r', '2',
         '-shortest',
         outputPath,
@@ -697,7 +1220,7 @@ class FFmpegService {
         ...codecConfig.extraArgs,
         ...codecConfig.videoEncoderArgs,
         ...codecConfig.audioEncoderArgs,
-        '-s', resolution,
+        '-s', finalRes,
         '-r', '2',
         '-shortest',
         '"$outputPath"',
@@ -718,9 +1241,9 @@ class FFmpegService {
     required String audioPath,
     required String imagePath,
     required String outputPath,
-    String resolution = '1920x1080',
-    String videoBitrate = '5000k',
-    String audioBitrate = '320k',
+    String? resolution,
+    String? videoBitrate,
+    String? audioBitrate,
     String hardwareAcceleration = 'auto',
     void Function(double progress)? onProgress,
     Completer<void>? cancelCompleter,
@@ -744,9 +1267,9 @@ class FFmpegService {
     required String videoPath,
     required String outputPath,
     required String targetFormat,
-    String resolution = '1920x1080',
-    String videoBitrate = '5000k',
-    String audioBitrate = '320k',
+    String? resolution,
+    String? videoBitrate,
+    String? audioBitrate,
     String hardwareAcceleration = 'auto',
     void Function(double progress)? onProgress,
     Completer<void>? cancelCompleter,
@@ -759,12 +1282,66 @@ class FFmpegService {
     }
 
     final durationSec = await getMediaDuration(videoPath) ?? 180.0;
+    final sourceInfo = await probeMedia(videoPath);
+
+    // Never upscale resolution: encode at source's own resolution unless user explicitly picks a lower one
+    String? scaleResolution;
+    int? targetW;
+    int? targetH;
+    if (resolution != null && resolution != 'original' && resolution != 'auto' && resolution.isNotEmpty) {
+      final parts = resolution.split('x');
+      if (parts.length == 2) {
+        final tw = int.tryParse(parts[0]);
+        final th = int.tryParse(parts[1]);
+        if (tw != null && th != null) {
+          if (sourceInfo.width != null && sourceInfo.height != null) {
+            if (tw >= sourceInfo.width! && th >= sourceInfo.height!) {
+              // Target is equal or larger -> would be upscaling!
+              scaleResolution = null;
+            } else {
+              scaleResolution = resolution;
+              targetW = tw;
+              targetH = th;
+            }
+          } else {
+            scaleResolution = resolution;
+            targetW = tw;
+            targetH = th;
+          }
+        }
+      }
+    }
+
+    final maxRateKbps = calculateBitrateCap(
+      info: sourceInfo,
+      targetWidth: targetW,
+      targetHeight: targetH,
+    );
+
+    String? effectiveAudioBitrate;
+    if (audioBitrate != null && audioBitrate != 'auto' && audioBitrate.isNotEmpty) {
+      final reqKbps = int.tryParse(audioBitrate.replaceAll(RegExp(r'[^0-9]'), ''));
+      if (reqKbps != null && sourceInfo.audioBitrateKbps != null && sourceInfo.audioBitrateKbps! > 0) {
+        final capA = (sourceInfo.audioBitrateKbps! * 1.5).round().clamp(64, 320);
+        if (reqKbps > capA) {
+          effectiveAudioBitrate = '${capA}k';
+        } else {
+          effectiveAudioBitrate = audioBitrate;
+        }
+      } else {
+        effectiveAudioBitrate = audioBitrate;
+      }
+    }
+
     final codecConfig = await getCodecConfigForFormat(
       targetFormat: targetFormat,
       videoBitrate: videoBitrate,
-      audioBitrate: audioBitrate,
+      audioBitrate: effectiveAudioBitrate,
+      audioSampleRate: sourceInfo.audioSampleRate,
+      audioChannels: sourceInfo.audioChannels,
       hardwareAcceleration: hardwareAcceleration,
       isStaticImage: false,
+      maxRateKbps: maxRateKbps,
     );
 
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
@@ -777,7 +1354,7 @@ class FFmpegService {
         ...codecConfig.extraArgs,
         ...codecConfig.videoEncoderArgs,
         ...codecConfig.audioEncoderArgs,
-        '-s', resolution,
+        if (scaleResolution != null) ...['-s', scaleResolution],
         outputPath,
       ];
 
@@ -798,7 +1375,7 @@ class FFmpegService {
         ...codecConfig.extraArgs,
         ...codecConfig.videoEncoderArgs,
         ...codecConfig.audioEncoderArgs,
-        '-s', resolution,
+        if (scaleResolution != null) '-s $scaleResolution',
         '"$outputPath"',
       ].join(' ');
 
@@ -817,7 +1394,7 @@ class FFmpegService {
     required String videoPath,
     required String outputPath,
     String targetFormat = 'mp3',
-    String audioBitrate = '320k',
+    String? audioBitrate,
     void Function(double progress)? onProgress,
     Completer<void>? cancelCompleter,
   }) async {
@@ -829,25 +1406,30 @@ class FFmpegService {
     }
 
     final durationSec = await getMediaDuration(videoPath) ?? 180.0;
+    final sourceInfo = await probeMedia(videoPath);
     final fmt = targetFormat.toLowerCase().replaceAll('.', '');
 
-    List<String> getAudioEncoderArgs() {
-      switch (fmt) {
-        case 'aac':
-          return ['-c:a', 'aac', '-b:a', audioBitrate];
-        case 'wav':
-          return ['-c:a', 'pcm_s16le'];
-        case 'flac':
-          return ['-c:a', 'flac'];
-        case 'ogg':
-          return ['-c:a', 'libvorbis', '-b:a', audioBitrate];
-        case 'opus':
-          return ['-c:a', 'libopus', '-b:a', audioBitrate];
-        case 'mp3':
-        default:
-          return ['-c:a', 'libmp3lame', '-b:a', audioBitrate, '-qscale:a', '2'];
+    String? explicitAudioBitrate;
+    if (audioBitrate != null && audioBitrate != 'auto' && audioBitrate.isNotEmpty) {
+      final reqKbps = int.tryParse(audioBitrate.replaceAll(RegExp(r'[^0-9]'), ''));
+      if (reqKbps != null && sourceInfo.audioBitrateKbps != null && sourceInfo.audioBitrateKbps! > 0) {
+        final capA = (sourceInfo.audioBitrateKbps! * 1.5).round().clamp(64, 320);
+        if (reqKbps > capA) {
+          explicitAudioBitrate = '${capA}k';
+        } else {
+          explicitAudioBitrate = audioBitrate;
+        }
+      } else {
+        explicitAudioBitrate = audioBitrate;
       }
     }
+
+    final audioEncoderArgs = buildAudioEncoderArgs(
+      targetFormat: fmt,
+      audioBitrate: explicitAudioBitrate,
+      sourceSampleRate: sourceInfo.audioSampleRate,
+      sourceChannels: sourceInfo.audioChannels,
+    );
 
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
       bool isAudioAlreadyMatching = false;
@@ -879,7 +1461,7 @@ class FFmpegService {
       if (isAudioAlreadyMatching) {
         args.addAll(['-c:a', 'copy']);
       } else {
-        args.addAll(getAudioEncoderArgs());
+        args.addAll(audioEncoderArgs);
       }
       args.add(outputPath);
 
@@ -891,7 +1473,7 @@ class FFmpegService {
         cancelCompleter: cancelCompleter,
       );
     } else {
-      final encoderFlags = getAudioEncoderArgs().join(' ');
+      final encoderFlags = audioEncoderArgs.join(' ');
       return _runMobileConversion(
         command:
             '-y -threads 0 -i "$videoPath" -vn -map 0:a:0? $encoderFlags "$outputPath"',
@@ -907,7 +1489,7 @@ class FFmpegService {
   static Future<FFmpegResult> convertVideoToMp3({
     required String videoPath,
     required String outputPath,
-    String audioBitrate = '320k',
+    String? audioBitrate,
     void Function(double progress)? onProgress,
     Completer<void>? cancelCompleter,
   }) {
@@ -925,7 +1507,7 @@ class FFmpegService {
   static Future<FFmpegResult> convertMp4ToMp3({
     required String videoPath,
     required String outputPath,
-    String audioBitrate = '320k',
+    String? audioBitrate,
     void Function(double progress)? onProgress,
     Completer<void>? cancelCompleter,
   }) {

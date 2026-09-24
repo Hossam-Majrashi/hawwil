@@ -164,7 +164,10 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
                     DropdownButtonFormField<String>(
                       value: _resolution,
                       items: ConversionSettings.availableResolutions.map((r) {
-                        return DropdownMenuItem(value: r, child: Text(r));
+                        return DropdownMenuItem(
+                          value: r,
+                          child: Text(r == 'original' ? l10n.tr('resOriginal') : r),
+                        );
                       }).toList(),
                       onChanged: (val) {
                         if (val != null) {
@@ -180,7 +183,10 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
                     DropdownButtonFormField<String>(
                       value: _videoBitrate,
                       items: ConversionSettings.availableVideoBitrates.map((b) {
-                        return DropdownMenuItem(value: b, child: Text(b));
+                        return DropdownMenuItem(
+                          value: b,
+                          child: Text(b == 'auto' ? l10n.tr('bitrateAuto') : b),
+                        );
                       }).toList(),
                       onChanged: (val) {
                         if (val != null) {
@@ -196,7 +202,10 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
                     DropdownButtonFormField<String>(
                       value: _audioBitrate,
                       items: ConversionSettings.availableAudioBitrates.map((a) {
-                        return DropdownMenuItem(value: a, child: Text(a));
+                        return DropdownMenuItem(
+                          value: a,
+                          child: Text(a == 'auto' ? l10n.tr('audioBitrateAuto') : a),
+                        );
                       }).toList(),
                       onChanged: (val) {
                         if (val != null) {

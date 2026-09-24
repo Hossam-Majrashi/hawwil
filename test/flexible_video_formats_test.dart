@@ -527,4 +527,581 @@ Error opening input files: Invalid data found when processing input
       expect(batch.failedCount, equals(1));
     });
   });
+
+  group('Output File Size Bloat & Resolution Control Tests', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('hawwil_bloat_test_');
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('ConversionSettings defaults are original resolution and auto bitrates', () {
+      final settings = ConversionSettings();
+      expect(settings.defaultResolution, equals('original'));
+      expect(settings.defaultVideoBitrate, equals('auto'));
+      expect(settings.defaultAudioBitrate, equals('auto'));
+      expect(ConversionSettings.availableResolutions.first, equals('original'));
+      expect(ConversionSettings.availableVideoBitrates.first, equals('auto'));
+      expect(ConversionSettings.availableAudioBitrates.first, equals('auto'));
+    });
+
+    test('calculateBitrateCap calculates generous resolution and framerate-based safety caps', () {
+      // 1. Low-res source (e.g. 320x240 @ 30 fps)
+      final lowInfo = MediaInfo(width: 320, height: 240, durationSeconds: 3900, totalBitrateKbps: 43);
+      final lowCap = FFmpegService.calculateBitrateCap(info: lowInfo);
+      expect(lowCap, equals(1500));
+
+      // 2. High-res source (e.g. 1920x1080 @ 30 fps)
+      final highInfo = MediaInfo(width: 1920, height: 1080, durationSeconds: 60, totalBitrateKbps: 8000);
+      final highCap = FFmpegService.calculateBitrateCap(info: highInfo);
+      expect(highCap, equals(20000));
+
+      // 3. 720p source (e.g. 1280x720 @ 30 fps)
+      final midInfo = MediaInfo(width: 1280, height: 720, durationSeconds: 60, totalBitrateKbps: 1500);
+      final midCap = FFmpegService.calculateBitrateCap(info: midInfo);
+      expect(midCap, equals(10000));
+
+      // 4. Framerate scaling (e.g. 1920x1080 @ 60 fps)
+      final highFpsInfo = MediaInfo(width: 1920, height: 1080, fps: 60.0);
+      final highFpsCap = FFmpegService.calculateBitrateCap(info: highFpsInfo);
+      expect(highFpsCap, equals(40000));
+    });
+
+    test('getCodecConfigForFormat uses CRF 23 or hardware CQ when videoBitrate is auto or null', () async {
+      // libx264
+      final x264Config = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        videoBitrate: 'auto',
+        audioBitrate: 'auto',
+        hardwareAcceleration: 'cpu_ultrafast',
+        maxRateKbps: 1500,
+      );
+      expect(x264Config.videoEncoderArgs, contains('-crf'));
+      expect(x264Config.videoEncoderArgs, contains('23'));
+      expect(x264Config.videoEncoderArgs, contains('-maxrate'));
+      expect(x264Config.videoEncoderArgs, contains('1500k'));
+      expect(x264Config.videoEncoderArgs, contains('-bufsize'));
+      expect(x264Config.videoEncoderArgs, contains('3000k'));
+
+      // VP9
+      final vp9Config = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'webm',
+        videoBitrate: 'auto',
+        audioBitrate: 'auto',
+        hardwareAcceleration: 'cpu_ultrafast',
+        maxRateKbps: 3000,
+      );
+      expect(vp9Config.videoEncoderArgs, contains('-crf'));
+      expect(vp9Config.videoEncoderArgs, contains('31'));
+      expect(vp9Config.videoEncoderArgs, contains('-b:v'));
+      expect(vp9Config.videoEncoderArgs, contains('0'));
+      expect(vp9Config.videoEncoderArgs, contains('-maxrate'));
+      expect(vp9Config.videoEncoderArgs, contains('3000k'));
+      expect(vp9Config.videoEncoderArgs, contains('-bufsize'));
+      expect(vp9Config.videoEncoderArgs, contains('6000k'));
+
+      // NVENC
+      final nvencConfig = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        videoBitrate: 'auto',
+        audioBitrate: 'auto',
+        hardwareAcceleration: 'nvenc',
+        maxRateKbps: 5000,
+      );
+      expect(nvencConfig.videoEncoderArgs, contains('-cq:v'));
+      expect(nvencConfig.videoEncoderArgs, contains('23'));
+      expect(nvencConfig.videoEncoderArgs, contains('-maxrate:v'));
+      expect(nvencConfig.videoEncoderArgs, contains('5000k'));
+      expect(nvencConfig.videoEncoderArgs, contains('-bufsize:v'));
+      expect(nvencConfig.videoEncoderArgs, contains('10000k'));
+
+      // QSV
+      final qsvConfig = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        videoBitrate: 'auto',
+        audioBitrate: 'auto',
+        hardwareAcceleration: 'qsv',
+        maxRateKbps: 5000,
+      );
+      expect(qsvConfig.videoEncoderArgs, contains('-global_quality'));
+      expect(qsvConfig.videoEncoderArgs, contains('23'));
+      expect(qsvConfig.videoEncoderArgs, contains('-maxrate:v'));
+      expect(qsvConfig.videoEncoderArgs, contains('5000k'));
+
+      // VideoToolbox
+      final vtConfig = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        videoBitrate: 'auto',
+        audioBitrate: 'auto',
+        hardwareAcceleration: 'videotoolbox',
+        maxRateKbps: 5000,
+      );
+      expect(vtConfig.videoEncoderArgs, contains('-q:v'));
+      expect(vtConfig.videoEncoderArgs, contains('60'));
+      expect(vtConfig.videoEncoderArgs, contains('-maxrate:v'));
+      expect(vtConfig.videoEncoderArgs, contains('5000k'));
+    });
+
+    test('Converting low-bitrate source prevents upscaling and size bloat', () async {
+      final isFfmpegAvailable = await FFmpegService.checkDesktopFFmpeg();
+      if (!isFfmpegAvailable) return;
+
+      // 1. Create a low-bitrate, low-resolution source: 320x240, 5 seconds @ ~40 kbps
+      final sourceLowPath = '${tempDir.path}/source_low.mkv';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=5:size=320x240:rate=10',
+        '-f', 'lavfi', '-i', 'sine=frequency=1000:duration=5',
+        '-c:v', 'libx264', '-b:v', '40k', '-preset', 'ultrafast',
+        '-c:a', 'aac', '-b:a', '32k',
+        sourceLowPath,
+      ]);
+      expect(await File(sourceLowPath).exists(), isTrue);
+
+      // 2. Convert with default settings (resolution: 'original', videoBitrate: 'auto')
+      final outDefaultPath = '${tempDir.path}/out_default.mp4';
+      final resDefault = await FFmpegService.convertVideoToVideo(
+        videoPath: sourceLowPath,
+        outputPath: outDefaultPath,
+        targetFormat: 'mp4',
+        videoBitrate: 'auto',
+        audioBitrate: 'auto',
+        resolution: 'original',
+      );
+      expect(resDefault.success, isTrue);
+      expect(await File(outDefaultPath).exists(), isTrue);
+
+      final outDefaultSize = await File(outDefaultPath).length();
+      // Output size must be in tens-of-KB range (roughly proportional to input), NOT megabytes!
+      expect(outDefaultSize, lessThan(200 * 1024)); // Less than 200 KB for 5 sec
+
+      // Verify resolution was NOT upscaled
+      final probeResult = await FFmpegService.probeMedia(outDefaultPath);
+      expect(probeResult.width, equals(320));
+      expect(probeResult.height, equals(240));
+
+      // 3. Even if user requests 1920x1080, "never upscale" rule keeps it at 320x240
+      final outNoUpscalePath = '${tempDir.path}/out_no_upscale.mp4';
+      final resNoUpscale = await FFmpegService.convertVideoToVideo(
+        videoPath: sourceLowPath,
+        outputPath: outNoUpscalePath,
+        targetFormat: 'mp4',
+        videoBitrate: 'auto',
+        audioBitrate: 'auto',
+        resolution: '1920x1080',
+      );
+      expect(resNoUpscale.success, isTrue);
+      final probeNoUpscale = await FFmpegService.probeMedia(outNoUpscalePath);
+      expect(probeNoUpscale.width, equals(320));
+      expect(probeNoUpscale.height, equals(240));
+    });
+
+    test('Converting higher-quality source retains resolution and quality without degrading', () async {
+      final isFfmpegAvailable = await FFmpegService.checkDesktopFFmpeg();
+      if (!isFfmpegAvailable) return;
+
+      // Create a 1-second 1920x1080 source file
+      final highSourcePath = '${tempDir.path}/source_high.mp4';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=1:size=1920x1080:rate=24',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+        '-c:v', 'libx264', '-crf', '20', '-preset', 'ultrafast',
+        '-c:a', 'aac', '-b:a', '192k',
+        highSourcePath,
+      ]);
+      expect(await File(highSourcePath).exists(), isTrue);
+
+      // Convert to MKV with default settings
+      final highOutPath = '${tempDir.path}/out_high.mkv';
+      final resHigh = await FFmpegService.convertVideoToVideo(
+        videoPath: highSourcePath,
+        outputPath: highOutPath,
+        targetFormat: 'mkv',
+        videoBitrate: 'auto',
+        audioBitrate: 'auto',
+        resolution: 'original',
+      );
+      expect(resHigh.success, isTrue);
+      expect(await File(highOutPath).exists(), isTrue);
+
+      final probeHigh = await FFmpegService.probeMedia(highOutPath);
+      expect(probeHigh.width, equals(1920));
+      expect(probeHigh.height, equals(1080));
+    });
+
+    test('Converting low-bitrate RealMedia (.rm) to MP4 with default settings produces tens-of-MB equivalent without upscaling', () async {
+      final isFfmpegAvailable = await FFmpegService.checkDesktopFFmpeg();
+      if (!isFfmpegAvailable) return;
+
+      // 1. Create a synthetic low-bitrate RealMedia (.rm) file: 320x240, 5 seconds @ ~40 kbps video + 32 kbps audio
+      final rmInputPath = '${tempDir.path}/clip_low.rm';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=5:size=320x240:rate=10',
+        '-f', 'lavfi', '-i', 'sine=frequency=800:duration=5',
+        '-c:v', 'rv20', '-b:v', '40k',
+        '-c:a', 'ac3', '-b:a', '32k',
+        rmInputPath,
+      ]);
+      expect(await File(rmInputPath).exists(), isTrue);
+
+      // 2. Convert with default settings (auto bitrate, original resolution)
+      final mp4OutPath = '${tempDir.path}/rm_default_converted.mp4';
+      final res = await FFmpegService.convertVideoToVideo(
+        videoPath: rmInputPath,
+        outputPath: mp4OutPath,
+        targetFormat: 'mp4',
+        videoBitrate: 'auto',
+        audioBitrate: 'auto',
+        resolution: 'original',
+      );
+      expect(res.success, isTrue);
+      expect(await File(mp4OutPath).exists(), isTrue);
+
+      // 3. Verify size: 5 seconds should be < 120 KB, which scales to ~45 MB for 65 minutes (tens of MB, not 1.1 GB)
+      final outSize = await File(mp4OutPath).length();
+      expect(outSize, lessThan(120 * 1024));
+
+      // 4. Verify resolution is maintained at 320x240
+      final probe = await FFmpegService.probeMedia(mp4OutPath);
+      expect(probe.width, equals(320));
+      expect(probe.height, equals(240));
+    });
+
+    test('Re-converting source with high-motion middle segment produces no blocky/glitchy middle while keeping size reasonable', () async {
+      final isFfmpegAvailable = await FFmpegService.checkDesktopFFmpeg();
+      if (!isFfmpegAvailable) return;
+
+      // 1. Create a source with calm start, high-motion / complex middle segment, and calm end:
+      // 3s calm testsrc, 4s intense pattern/motion testsrc2, 3s calm testsrc.
+      final burstSourcePath = '${tempDir.path}/burst_source.mp4';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=3:size=320x240:rate=25',
+        '-f', 'lavfi', '-i', 'testsrc2=duration=4:size=320x240:rate=25',
+        '-f', 'lavfi', '-i', 'testsrc=duration=3:size=320x240:rate=25',
+        '-filter_complex', '[0:v]format=yuv420p[v0];[1:v]format=yuv420p[v1];[2:v]format=yuv420p[v2];[v0][v1][v2]concat=n=3:v=1:a=0[outv]',
+        '-map', '[outv]',
+        '-c:v', 'libx264', '-crf', '22', '-preset', 'ultrafast',
+        burstSourcePath,
+      ]);
+      expect(await File(burstSourcePath).exists(), isTrue);
+
+      // 2. Convert with default settings (auto bitrate, original resolution)
+      final burstOutPath = '${tempDir.path}/burst_converted.mp4';
+      final res = await FFmpegService.convertVideoToVideo(
+        videoPath: burstSourcePath,
+        outputPath: burstOutPath,
+        targetFormat: 'mp4',
+        videoBitrate: 'auto',
+        audioBitrate: 'auto',
+        resolution: 'original',
+      );
+      expect(res.success, isTrue);
+      expect(await File(burstOutPath).exists(), isTrue);
+
+      // 3. Step through the middle of the video (t = 4.0s, 5.0s, 6.0s) and verify visual fidelity
+      for (final t in ['4.0', '5.0', '6.0']) {
+        final srcFrame = '${tempDir.path}/frame_src_$t.png';
+        final outFrame = '${tempDir.path}/frame_out_$t.png';
+        await Process.run('ffmpeg', ['-y', '-ss', t, '-i', burstSourcePath, '-vframes', '1', srcFrame]);
+        await Process.run('ffmpeg', ['-y', '-ss', t, '-i', burstOutPath, '-vframes', '1', outFrame]);
+        expect(await File(srcFrame).exists(), isTrue);
+        expect(await File(outFrame).exists(), isTrue);
+      }
+
+      // Check SSIM specifically across the middle complex segment (t=3s to t=7s)
+      final ssimRes = await Process.run('ffmpeg', [
+        '-ss', '3.0', '-t', '4.0', '-i', burstOutPath,
+        '-ss', '3.0', '-t', '4.0', '-i', burstSourcePath,
+        '-filter_complex', 'ssim', '-f', 'null', '-'
+      ]);
+      final ssimLogs = ssimRes.stderr.toString();
+      final ssimMatch = RegExp(r'All:(\d+\.\d+)').firstMatch(ssimLogs);
+      expect(ssimMatch, isNotNull);
+      final ssimVal = double.parse(ssimMatch!.group(1)!);
+      // High visual fidelity: no blocky/glitchy corruption in the middle (SSIM > 0.98)
+      expect(ssimVal, greaterThan(0.98));
+
+      // 4. Output size stays reasonable and compact (not gigabytes)
+      final outSize = await File(burstOutPath).length();
+      expect(outSize, lessThan(600 * 1024)); // Less than 600 KB for 10 seconds of 320x240
+    });
+  });
+
+  group('Audio Quality & VBR Bitrate Control Tests', () {
+    late Directory audioTempDir;
+
+    setUp(() async {
+      audioTempDir = await Directory.systemTemp.createTemp('hawwil_audio_test_');
+    });
+
+    tearDown(() async {
+      if (await audioTempDir.exists()) {
+        await audioTempDir.delete(recursive: true);
+      }
+    });
+
+    test('buildAudioEncoderArgs uses quality-based VBR for lossy codecs and preserves lossless', () {
+      // 1. MP3 auto uses libmp3lame with -q:a 2 (not fixed CBR)
+      final mp3Args = FFmpegService.buildAudioEncoderArgs(targetFormat: 'mp3');
+      expect(mp3Args, contains('libmp3lame'));
+      expect(mp3Args, contains('-q:a'));
+      expect(mp3Args, contains('2'));
+      expect(mp3Args, isNot(contains('-b:a')));
+
+      // 2. AAC auto uses -q:a 2 VBR
+      final aacArgs = FFmpegService.buildAudioEncoderArgs(targetFormat: 'aac');
+      expect(aacArgs, contains('aac'));
+      expect(aacArgs, contains('-q:a'));
+      expect(aacArgs, contains('2'));
+      expect(aacArgs, isNot(contains('-b:a')));
+
+      // 3. Opus auto uses VBR with ~128k
+      final opusArgs = FFmpegService.buildAudioEncoderArgs(targetFormat: 'opus');
+      expect(opusArgs, contains('libopus'));
+      expect(opusArgs, contains('-vbr'));
+      expect(opusArgs, contains('on'));
+      expect(opusArgs, contains('128k'));
+
+      // 4. Vorbis auto uses -q:a 5 VBR
+      final oggArgs = FFmpegService.buildAudioEncoderArgs(targetFormat: 'ogg');
+      expect(oggArgs, contains('libvorbis'));
+      expect(oggArgs, contains('-q:a'));
+      expect(oggArgs, contains('5'));
+
+      // 5. Lossless WAV & FLAC: uncompressed/lossless without lossy VBR or CBR flags
+      final wavArgs = FFmpegService.buildAudioEncoderArgs(targetFormat: 'wav');
+      expect(wavArgs, equals(['-c:a', 'pcm_s16le']));
+
+      final flacArgs = FFmpegService.buildAudioEncoderArgs(targetFormat: 'flac');
+      expect(flacArgs, equals(['-c:a', 'flac']));
+
+      // 6. Channel preservation: never upmix mono to stereo
+      final monoArgs = FFmpegService.buildAudioEncoderArgs(
+        targetFormat: 'mp3',
+        sourceChannels: 1,
+      );
+      expect(monoArgs, contains('-ac'));
+      expect(monoArgs, contains('1'));
+
+      final stereoArgs = FFmpegService.buildAudioEncoderArgs(
+        targetFormat: 'aac',
+        sourceChannels: 2,
+      );
+      expect(stereoArgs, contains('-ac'));
+      expect(stereoArgs, contains('2'));
+
+      // 7. Sample rate preservation: never upsample low sample rate
+      final lowRateArgs = FFmpegService.buildAudioEncoderArgs(
+        targetFormat: 'mp3',
+        sourceSampleRate: 22050,
+      );
+      expect(lowRateArgs, contains('-ar'));
+      expect(lowRateArgs, contains('22050'));
+
+      // Opus rate whitelist handling: 22050 is not in Opus whitelist [8000, 12000, 16000, 24000, 48000]
+      // so -ar should not be passed for 22050 to prevent libopus encoder exit error
+      final opusLowRateArgs = FFmpegService.buildAudioEncoderArgs(
+        targetFormat: 'opus',
+        sourceSampleRate: 22050,
+      );
+      expect(opusLowRateArgs, isNot(contains('-ar')));
+
+      final opusValidRateArgs = FFmpegService.buildAudioEncoderArgs(
+        targetFormat: 'opus',
+        sourceSampleRate: 16000,
+      );
+      expect(opusValidRateArgs, contains('-ar'));
+      expect(opusValidRateArgs, contains('16000'));
+
+      // 8. Explicit bitrate override respected if user asks for it
+      final explicitArgs = FFmpegService.buildAudioEncoderArgs(
+        targetFormat: 'mp3',
+        audioBitrate: '64k',
+      );
+      expect(explicitArgs, contains('-b:a'));
+      expect(explicitArgs, contains('64k'));
+      expect(explicitArgs, isNot(contains('-q:a')));
+    });
+
+    test('Converting low-quality audio source scales output size with real quality without upsampling', () async {
+      final isFfmpegAvailable = await FFmpegService.checkDesktopFFmpeg();
+      if (!isFfmpegAvailable) return;
+
+      // Create a 3-second low-quality mono source: 22050 Hz @ 32 kbps
+      final lowAudioSource = '${audioTempDir.path}/low_quality_source.mp3';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
+        '-c:a', 'libmp3lame',
+        '-ar', '22050',
+        '-ac', '1',
+        '-b:a', '32k',
+        lowAudioSource,
+      ]);
+      expect(await File(lowAudioSource).exists(), isTrue);
+
+      // Verify source probe: mono (1 channel), 22050 Hz
+      final srcProbe = await FFmpegService.probeMedia(lowAudioSource);
+      expect(srcProbe.audioChannels, equals(1));
+      expect(srcProbe.audioSampleRate, equals(22050));
+
+      // 1. Convert to MP3 with default auto settings
+      final mp3Out = '${audioTempDir.path}/out_low.mp3';
+      final resMp3 = await FFmpegService.convertVideoToAudio(
+        videoPath: lowAudioSource,
+        outputPath: mp3Out,
+        targetFormat: 'mp3',
+        audioBitrate: 'auto',
+      );
+      expect(resMp3.success, isTrue);
+      expect(await File(mp3Out).exists(), isTrue);
+
+      final outProbeMp3 = await FFmpegService.probeMedia(mp3Out);
+      // Preserved mono and 22050 Hz without upsampling!
+      expect(outProbeMp3.audioChannels, equals(1));
+      expect(outProbeMp3.audioSampleRate, equals(22050));
+
+      // File size scales with low quality (3s at ~25-35 kbps is < 20 KB; 320 kbps CBR would be ~120 KB!)
+      final mp3Size = await File(mp3Out).length();
+      expect(mp3Size, lessThan(30 * 1024));
+
+      // 2. Convert to AAC with default auto settings
+      final aacOut = '${audioTempDir.path}/out_low.aac';
+      final resAac = await FFmpegService.convertVideoToAudio(
+        videoPath: lowAudioSource,
+        outputPath: aacOut,
+        targetFormat: 'aac',
+        audioBitrate: 'auto',
+      );
+      expect(resAac.success, isTrue);
+      expect(await File(aacOut).exists(), isTrue);
+
+      final outProbeAac = await FFmpegService.probeMedia(aacOut);
+      expect(outProbeAac.audioChannels, equals(1));
+      expect(outProbeAac.audioSampleRate, equals(22050));
+      final aacSize = await File(aacOut).length();
+      expect(aacSize, lessThan(45 * 1024)); // < 45 KB vs 120 KB for fixed 320k CBR
+    });
+
+    test('Converting normal quality audio source retains fidelity and correct parameters', () async {
+      final isFfmpegAvailable = await FFmpegService.checkDesktopFFmpeg();
+      if (!isFfmpegAvailable) return;
+
+      // Create a 3-second normal quality stereo source: 44100 Hz
+      final normalAudioSource = '${audioTempDir.path}/normal_quality_source.wav';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'sine=frequency=1000:duration=3',
+        '-c:a', 'pcm_s16le',
+        '-ar', '44100',
+        '-ac', '2',
+        normalAudioSource,
+      ]);
+      expect(await File(normalAudioSource).exists(), isTrue);
+
+      // 1. Convert to MP3
+      final mp3Out = '${audioTempDir.path}/normal_out.mp3';
+      final resMp3 = await FFmpegService.convertVideoToAudio(
+        videoPath: normalAudioSource,
+        outputPath: mp3Out,
+        targetFormat: 'mp3',
+        audioBitrate: 'auto',
+      );
+      expect(resMp3.success, isTrue);
+      expect(await File(mp3Out).exists(), isTrue);
+
+      final probeMp3 = await FFmpegService.probeMedia(mp3Out);
+      expect(probeMp3.audioChannels, equals(2));
+      expect(probeMp3.audioSampleRate, equals(44100));
+      expect(probeMp3.durationSeconds, closeTo(3.0, 0.5));
+
+      // 2. Convert to AAC
+      final aacOut = '${audioTempDir.path}/normal_out.aac';
+      final resAac = await FFmpegService.convertVideoToAudio(
+        videoPath: normalAudioSource,
+        outputPath: aacOut,
+        targetFormat: 'aac',
+        audioBitrate: 'auto',
+      );
+      expect(resAac.success, isTrue);
+      expect(await File(aacOut).exists(), isTrue);
+
+      final probeAac = await FFmpegService.probeMedia(aacOut);
+      expect(probeAac.audioChannels, equals(2));
+      expect(probeAac.audioSampleRate, equals(44100));
+
+      // 3. Convert to Opus
+      final opusOut = '${audioTempDir.path}/normal_out.opus';
+      final resOpus = await FFmpegService.convertVideoToAudio(
+        videoPath: normalAudioSource,
+        outputPath: opusOut,
+        targetFormat: 'opus',
+        audioBitrate: 'auto',
+      );
+      expect(resOpus.success, isTrue);
+      expect(await File(opusOut).exists(), isTrue);
+
+      final probeOpus = await FFmpegService.probeMedia(opusOut);
+      expect(probeOpus.audioChannels, equals(2));
+      // Opus natively encodes at 48000 Hz internal rate
+      expect(probeOpus.audioSampleRate, equals(48000));
+    });
+
+    test('Video container embedding audio track uses VBR and preserves source audio specs', () async {
+      final isFfmpegAvailable = await FFmpegService.checkDesktopFFmpeg();
+      if (!isFfmpegAvailable) return;
+
+      // Create a 3-second mono 22050 Hz audio file
+      final monoAudio = '${audioTempDir.path}/mono_speech.mp3';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'sine=frequency=600:duration=3',
+        '-c:a', 'libmp3lame',
+        '-ar', '22050',
+        '-ac', '1',
+        '-b:a', '32k',
+        monoAudio,
+      ]);
+
+      // Create a 320x240 image
+      final imgPath = '${audioTempDir.path}/cover.png';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'color=c=blue:s=320x240:d=1',
+        '-vframes', '1',
+        imgPath,
+      ]);
+
+      // Cover-to-video (convertMp3ToVideo) into MP4
+      final mp4Out = '${audioTempDir.path}/cover_video.mp4';
+      final res = await FFmpegService.convertMp3ToVideo(
+        audioPath: monoAudio,
+        imagePath: imgPath,
+        outputPath: mp4Out,
+        targetFormat: 'mp4',
+        audioBitrate: 'auto',
+      );
+      expect(res.success, isTrue);
+      expect(await File(mp4Out).exists(), isTrue);
+
+      // Probe output MP4 audio stream
+      final probe = await FFmpegService.probeMedia(mp4Out);
+      expect(probe.audioChannels, equals(1)); // Preserved mono (no upmixing)
+      expect(probe.audioSampleRate, equals(22050)); // Preserved 22050 Hz (no upsampling)
+
+      // Total size is small (not bloated with 320k audio)
+      final size = await File(mp4Out).length();
+      expect(size, lessThan(40 * 1024));
+    });
+  });
 }
+

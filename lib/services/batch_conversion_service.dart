@@ -322,7 +322,10 @@ class BatchConversionService extends ChangeNotifier {
           imagePath: imageToUse,
           outputPath: outPath,
           targetFormat: targetExt,
-          resolution: item.resolutionOverride ?? settings.defaultResolution,
+          resolution: item.resolutionOverride ??
+              (settings.defaultResolution == 'original'
+                  ? '1920x1080'
+                  : settings.defaultResolution),
           videoBitrate: item.videoBitrateOverride ?? settings.defaultVideoBitrate,
           audioBitrate: item.audioBitrateOverride ?? settings.defaultAudioBitrate,
           hardwareAcceleration: settings.hardwareAcceleration,
@@ -405,7 +408,10 @@ class BatchConversionService extends ChangeNotifier {
           videoPath: item.sourcePath,
           outputPath: outPath,
           targetFormat: targetExt,
-          resolution: item.resolutionOverride ?? settings.defaultResolution,
+          resolution: item.resolutionOverride ??
+              (settings.defaultResolution == 'original'
+                  ? null
+                  : settings.defaultResolution),
           videoBitrate: item.videoBitrateOverride ?? settings.defaultVideoBitrate,
           audioBitrate: item.audioBitrateOverride ?? settings.defaultAudioBitrate,
           hardwareAcceleration: settings.hardwareAcceleration,

@@ -46,9 +46,9 @@ class SettingsService extends ChangeNotifier {
     _firstRunCompleted = _prefs.getBool(_keyFirstRun) ?? false;
 
     _conversionSettings = ConversionSettings(
-      defaultResolution: _prefs.getString(_keyResolution) ?? '1920x1080',
-      defaultVideoBitrate: _prefs.getString(_keyVideoBitrate) ?? '5000k',
-      defaultAudioBitrate: _prefs.getString(_keyAudioBitrate) ?? '320k',
+      defaultResolution: _prefs.getString(_keyResolution) ?? 'original',
+      defaultVideoBitrate: _prefs.getString(_keyVideoBitrate) ?? 'auto',
+      defaultAudioBitrate: _prefs.getString(_keyAudioBitrate) ?? 'auto',
       hardwareAcceleration: _prefs.getString(_keyHardwareAcceleration) ?? 'auto',
       defaultVideoOutputFormat: _prefs.getString(_keyVideoOutputFormat) ?? 'mp4',
       outputFolder: _prefs.getString(_keyOutputFolder),
