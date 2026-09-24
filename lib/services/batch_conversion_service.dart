@@ -169,13 +169,16 @@ class BatchConversionService extends ChangeNotifier {
           item.durationSeconds = meta.duration.inMilliseconds / 1000.0;
         }
       } else {
-        // Video input (MP4, MKV, WebM, AVI, MOV, FLV, WMV, etc.): extract first frame
+        // Video / general media input (MP4, MKV, WebM, AVI, MOV, FLV, WMV, RM, RAM, etc.):
         final frameBytes = await FFmpegService.extractVideoFrame(
           videoPath: item.sourcePath,
           timestampSeconds: 0.0,
         );
         if (frameBytes != null) {
           item.thumbnailBytes = frameBytes;
+          item.hasVideoStream = true;
+        } else {
+          item.hasVideoStream = await FFmpegService.hasVideoStream(item.sourcePath);
         }
         final tags = await FFmpegService.readMediaTags(item.sourcePath);
         item.title = tags['title']?.isNotEmpty == true ? tags['title']! : p.basenameWithoutExtension(item.fileName);
@@ -187,8 +190,10 @@ class BatchConversionService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Error inspecting item ${item.fileName}: $e');
     } finally {
-      item.status = ConversionStatus.queued;
-      notifyListeners();
+      if (item.status == ConversionStatus.extractingThumbnail) {
+        item.status = ConversionStatus.queued;
+        notifyListeners();
+      }
     }
   }
 
@@ -270,7 +275,10 @@ class BatchConversionService extends ChangeNotifier {
 
       final targetExt = item.targetFormat.toLowerCase().replaceAll('.', '');
 
-      if (item.isAudioInput) {
+      final isAudioToVideo = item.isAudioInput ||
+          (item.hasVideoStream == false && !item.isTargetAudio);
+
+      if (isAudioToVideo) {
         // Output chosen video format (default MP4)
         final outPath = p.join(outDir, '$formattedName.$targetExt');
         item.outputPath = outPath;
@@ -340,13 +348,14 @@ class BatchConversionService extends ChangeNotifier {
           item.errorMessage = res.errorMessage;
         }
       } else if (item.isTargetAudio) {
-        // Output MP3 (Audio Extraction from video)
-        final outPath = p.join(outDir, '$formattedName.mp3');
+        // Output audio format (Audio Extraction from video)
+        final outPath = p.join(outDir, '$formattedName.$targetExt');
         item.outputPath = outPath;
 
-        final res = await FFmpegService.convertVideoToMp3(
+        final res = await FFmpegService.convertVideoToAudio(
           videoPath: item.sourcePath,
           outputPath: outPath,
+          targetFormat: targetExt,
           audioBitrate: item.audioBitrateOverride ?? settings.defaultAudioBitrate,
           onProgress: (prog) {
             // Audio extraction accounts for 85% of progress

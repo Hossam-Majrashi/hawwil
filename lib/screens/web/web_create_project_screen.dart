@@ -128,7 +128,13 @@ class _WebCreateProjectScreenState extends State<WebCreateProjectScreen> {
                                       leading: ThumbnailPreview(
                                         bytes: item.thumbnailBytes,
                                         size: 48,
+                                        placeholderIcon: (item.isAudioInput || item.hasVideoStream == false)
+                                            ? Icons.music_note_rounded
+                                            : Icons.videocam_rounded,
                                         badgeText: item.fileExtension.toUpperCase(),
+                                        badgeColor: (item.isAudioInput || item.hasVideoStream == false)
+                                            ? Colors.blueAccent
+                                            : Colors.purpleAccent,
                                       ),
                                       title: Text(item.fileName, maxLines: 1),
                                       subtitle: PopupMenuButton<String>(
@@ -139,7 +145,7 @@ class _WebCreateProjectScreenState extends State<WebCreateProjectScreen> {
                                         },
                                         itemBuilder: (context) {
                                           if (item.isAudioInput) {
-                                            return ConversionSettings.availableVideoFormats.map(
+                                            return ConversionItem.supportedVideoFormats.map(
                                               (fmt) => PopupMenuItem(
                                                 value: fmt,
                                                 child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
@@ -147,12 +153,14 @@ class _WebCreateProjectScreenState extends State<WebCreateProjectScreen> {
                                             ).toList();
                                           } else {
                                             return [
-                                              PopupMenuItem(
-                                                value: 'mp3',
-                                                child: Text(l10n.tr('formatMp3')),
+                                              ...ConversionItem.supportedAudioOutputFormats.map(
+                                                (fmt) => PopupMenuItem(
+                                                  value: fmt,
+                                                  child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
+                                                ),
                                               ),
                                               const PopupMenuDivider(),
-                                              ...ConversionSettings.availableVideoFormats.map(
+                                              ...ConversionItem.supportedVideoFormats.map(
                                                 (fmt) => PopupMenuItem(
                                                   value: fmt,
                                                   child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),

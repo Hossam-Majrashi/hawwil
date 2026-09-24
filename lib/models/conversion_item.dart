@@ -24,6 +24,9 @@ class ConversionItem {
     'avi',
     'flv',
     'wmv',
+    'mpg',
+    'mpeg',
+    'ogv',
   ];
 
   static const List<String> supportedInputVideoExtensions = [
@@ -37,6 +40,15 @@ class ConversionItem {
     'm4v',
     'ts',
     '3gp',
+    'rm',
+    'ram',
+    'mpg',
+    'mpeg',
+    'vob',
+    'ogv',
+    'mts',
+    'm2ts',
+    'asf',
   ];
 
   static const List<String> supportedInputAudioExtensions = [
@@ -47,6 +59,11 @@ class ConversionItem {
     'm4a',
     'ogg',
     'wma',
+    'opus',
+    'aiff',
+    'aif',
+    'amr',
+    'ac3',
   ];
 
   static const List<String> allAllowedInputExtensions = [
@@ -57,6 +74,11 @@ class ConversionItem {
     'm4a',
     'ogg',
     'wma',
+    'opus',
+    'aiff',
+    'aif',
+    'amr',
+    'ac3',
     'mp4',
     'mkv',
     'mov',
@@ -67,6 +89,24 @@ class ConversionItem {
     'm4v',
     'ts',
     '3gp',
+    'rm',
+    'ram',
+    'mpg',
+    'mpeg',
+    'vob',
+    'ogv',
+    'mts',
+    'm2ts',
+    'asf',
+  ];
+
+  static const List<String> supportedAudioOutputFormats = [
+    'mp3',
+    'aac',
+    'wav',
+    'flac',
+    'ogg',
+    'opus',
   ];
 
   final String id;
@@ -83,6 +123,7 @@ class ConversionItem {
   bool hasEmbeddedCover;
   double videoScrubSeconds;
   double? durationSeconds;
+  bool? hasVideoStream;
 
   // Metadata tags
   String? title;
@@ -109,6 +150,7 @@ class ConversionItem {
     this.hasEmbeddedCover = false,
     this.videoScrubSeconds = 0.0,
     this.durationSeconds,
+    this.hasVideoStream,
     this.title,
     this.artist,
     this.album,
@@ -151,7 +193,10 @@ class ConversionItem {
 
   bool get isVideoInput => !isAudioInput;
 
-  bool get isTargetAudio => targetFormat.toLowerCase() == 'mp3';
+  bool get isRealMedia => fileExtension == 'rm' || fileExtension == 'ram';
+
+  bool get isTargetAudio =>
+      supportedAudioOutputFormats.contains(targetFormat.toLowerCase());
   bool get isTargetVideo => !isTargetAudio;
 
   // Backward compatibility getters

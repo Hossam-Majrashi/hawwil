@@ -119,7 +119,13 @@ class WebProgressScreen extends StatelessWidget {
                               leading: ThumbnailPreview(
                                 bytes: item.thumbnailBytes,
                                 size: 48,
+                                placeholderIcon: (item.isAudioInput || item.hasVideoStream == false)
+                                    ? Icons.music_note_rounded
+                                    : Icons.videocam_rounded,
                                 badgeText: item.fileExtension.toUpperCase(),
+                                badgeColor: (item.isAudioInput || item.hasVideoStream == false)
+                                    ? Colors.blueAccent
+                                    : Colors.purpleAccent,
                               ),
                               title: Row(
                                 children: [

@@ -36,6 +36,9 @@ class ConversionSettings {
     'avi',
     'flv',
     'wmv',
+    'mpg',
+    'mpeg',
+    'ogv',
   ];
 
   static const List<String> allOutputFormatsForVideos = [
@@ -46,7 +49,15 @@ class ConversionSettings {
     'avi',
     'flv',
     'wmv',
+    'mpg',
+    'mpeg',
+    'ogv',
     'mp3',
+    'aac',
+    'wav',
+    'flac',
+    'ogg',
+    'opus',
   ];
 
   String defaultResolution;

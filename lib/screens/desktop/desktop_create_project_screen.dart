@@ -343,7 +343,8 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
     ThemeData theme,
     bool isDark,
   ) {
-    final isMp3ToMp4 = item.direction == ConversionDirection.mp3ToMp4;
+    final isAudioLike = item.isAudioInput || item.hasVideoStream == false;
+    final isMp3ToMp4 = item.direction == ConversionDirection.mp3ToMp4 || isAudioLike;
 
     return Card(
       child: Padding(
@@ -400,7 +401,7 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
                         },
                         itemBuilder: (context) {
                           if (item.isAudioInput) {
-                            return ConversionSettings.availableVideoFormats.map(
+                            return ConversionItem.supportedVideoFormats.map(
                               (fmt) => PopupMenuItem(
                                 value: fmt,
                                 child: Row(
@@ -414,18 +415,20 @@ class _DesktopCreateProjectScreenState extends State<DesktopCreateProjectScreen>
                             ).toList();
                           } else {
                             return [
-                              PopupMenuItem(
-                                value: 'mp3',
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.music_note_rounded, size: 16, color: Colors.blueAccent),
-                                    const SizedBox(width: 8),
-                                    Text(l10n.tr('formatMp3')),
-                                  ],
+                              ...ConversionItem.supportedAudioOutputFormats.map(
+                                (fmt) => PopupMenuItem(
+                                  value: fmt,
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.music_note_rounded, size: 16, color: Colors.blueAccent),
+                                      const SizedBox(width: 8),
+                                      Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
+                                    ],
+                                  ),
                                 ),
                               ),
                               const PopupMenuDivider(),
-                              ...ConversionSettings.availableVideoFormats.map(
+                              ...ConversionItem.supportedVideoFormats.map(
                                 (fmt) => PopupMenuItem(
                                   value: fmt,
                                   child: Row(

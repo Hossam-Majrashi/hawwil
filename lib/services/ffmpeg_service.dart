@@ -438,6 +438,43 @@ class FFmpegService {
     return null;
   }
 
+  /// Check if the media file contains a video stream
+  static Future<bool> hasVideoStream(String filePath) async {
+    if (kIsWeb) return false;
+
+    try {
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        final res = await Process.run('ffprobe', [
+          '-v',
+          'error',
+          '-select_streams',
+          'v:0',
+          '-show_entries',
+          'stream=codec_type',
+          '-of',
+          'default=noprint_wrappers=1:nokey=1',
+          filePath,
+        ]);
+        if (res.exitCode == 0 && res.stdout.toString().trim() == 'video') {
+          return true;
+        }
+
+        final p = await Process.run('ffmpeg', ['-i', filePath]);
+        final stderrStr = p.stderr.toString();
+        return RegExp(r'Stream #\d+:\d+.*Video:').hasMatch(stderrStr);
+      } else if (Platform.isAndroid || Platform.isIOS) {
+        final session = await FFmpegKit.execute('-i "$filePath"');
+        final logs = await session.getAllLogsAsString();
+        if (logs != null && RegExp(r'Stream #\d+:\d+.*Video:').hasMatch(logs)) {
+          return true;
+        }
+      }
+    } catch (e) {
+      debugPrint('hasVideoStream error: $e');
+    }
+    return false;
+  }
+
   /// Unified codec and container configuration builder sitting in one place for
   /// both static-image cover-to-video and video-to-video conversions.
   static Future<VideoCodecConfig> getCodecConfigForFormat({
@@ -510,6 +547,36 @@ class FFmpegService {
           ],
           audioEncoderArgs: [
             '-c:a', 'aac',
+            '-b:a', audioBitrate,
+          ],
+          extraArgs: ['-pix_fmt', 'yuv420p'],
+        );
+
+      case 'ogv':
+        return VideoCodecConfig(
+          containerFormat: 'ogg',
+          videoEncoderArgs: [
+            '-c:v', 'libtheora',
+            '-q:v', '7',
+            '-b:v', videoBitrate,
+          ],
+          audioEncoderArgs: [
+            '-c:a', 'libvorbis',
+            '-b:a', audioBitrate,
+          ],
+          extraArgs: ['-pix_fmt', 'yuv420p'],
+        );
+
+      case 'mpg':
+      case 'mpeg':
+        return VideoCodecConfig(
+          containerFormat: 'mpeg',
+          videoEncoderArgs: [
+            '-c:v', 'mpeg2video',
+            '-b:v', videoBitrate,
+          ],
+          audioEncoderArgs: [
+            '-c:a', 'mp2',
             '-b:a', audioBitrate,
           ],
           extraArgs: ['-pix_fmt', 'yuv420p'],
@@ -745,10 +812,11 @@ class FFmpegService {
     }
   }
 
-  /// Convert any input video (MP4, MKV, WebM, AVI, MOV, FLV, WMV) to MP3 audio
-  static Future<FFmpegResult> convertVideoToMp3({
+  /// Convert any input video (MP4, MKV, WebM, AVI, MOV, FLV, WMV, MPG, MPEG, OGV, etc.) to target audio format (MP3, AAC, WAV, FLAC, OGG, OPUS)
+  static Future<FFmpegResult> convertVideoToAudio({
     required String videoPath,
     required String outputPath,
+    String targetFormat = 'mp3',
     String audioBitrate = '320k',
     void Function(double progress)? onProgress,
     Completer<void>? cancelCompleter,
@@ -761,9 +829,28 @@ class FFmpegService {
     }
 
     final durationSec = await getMediaDuration(videoPath) ?? 180.0;
+    final fmt = targetFormat.toLowerCase().replaceAll('.', '');
+
+    List<String> getAudioEncoderArgs() {
+      switch (fmt) {
+        case 'aac':
+          return ['-c:a', 'aac', '-b:a', audioBitrate];
+        case 'wav':
+          return ['-c:a', 'pcm_s16le'];
+        case 'flac':
+          return ['-c:a', 'flac'];
+        case 'ogg':
+          return ['-c:a', 'libvorbis', '-b:a', audioBitrate];
+        case 'opus':
+          return ['-c:a', 'libopus', '-b:a', audioBitrate];
+        case 'mp3':
+        default:
+          return ['-c:a', 'libmp3lame', '-b:a', audioBitrate, '-qscale:a', '2'];
+      }
+    }
 
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-      bool isAudioAlreadyMp3 = false;
+      bool isAudioAlreadyMatching = false;
       try {
         final probe = await Process.run('ffprobe', [
           '-v', 'error',
@@ -772,8 +859,12 @@ class FFmpegService {
           '-of', 'default=noprint_wrappers=1:nokey=1',
           videoPath,
         ]);
-        if (probe.exitCode == 0 && probe.stdout.toString().trim() == 'mp3') {
-          isAudioAlreadyMp3 = true;
+        final streamCodec = probe.stdout.toString().trim().toLowerCase();
+        if (probe.exitCode == 0 &&
+            (streamCodec == fmt ||
+                (fmt == 'ogg' && streamCodec == 'vorbis') ||
+                (fmt == 'wav' && streamCodec.startsWith('pcm')))) {
+          isAudioAlreadyMatching = true;
         }
       } catch (_) {}
 
@@ -785,14 +876,10 @@ class FFmpegService {
         '-map', '0:a:0?',
       ];
 
-      if (isAudioAlreadyMp3) {
+      if (isAudioAlreadyMatching) {
         args.addAll(['-c:a', 'copy']);
       } else {
-        args.addAll([
-          '-c:a', 'libmp3lame',
-          '-b:a', audioBitrate,
-          '-qscale:a', '2',
-        ]);
+        args.addAll(getAudioEncoderArgs());
       }
       args.add(outputPath);
 
@@ -804,15 +891,34 @@ class FFmpegService {
         cancelCompleter: cancelCompleter,
       );
     } else {
+      final encoderFlags = getAudioEncoderArgs().join(' ');
       return _runMobileConversion(
         command:
-            '-y -threads 0 -i "$videoPath" -vn -map 0:a:0? -c:a libmp3lame -b:a $audioBitrate -qscale:a 2 "$outputPath"',
+            '-y -threads 0 -i "$videoPath" -vn -map 0:a:0? $encoderFlags "$outputPath"',
         totalDurationSeconds: durationSec,
         outputPath: outputPath,
         onProgress: onProgress,
         cancelCompleter: cancelCompleter,
       );
     }
+  }
+
+  /// Backward-compatible alias for convertVideoToAudio targeting MP3
+  static Future<FFmpegResult> convertVideoToMp3({
+    required String videoPath,
+    required String outputPath,
+    String audioBitrate = '320k',
+    void Function(double progress)? onProgress,
+    Completer<void>? cancelCompleter,
+  }) {
+    return convertVideoToAudio(
+      videoPath: videoPath,
+      outputPath: outputPath,
+      targetFormat: 'mp3',
+      audioBitrate: audioBitrate,
+      onProgress: onProgress,
+      cancelCompleter: cancelCompleter,
+    );
   }
 
   /// Backward-compatible alias for convertVideoToMp3
@@ -888,9 +994,25 @@ class FFmpegService {
           outputPath: outputPath,
         );
       } else {
+        String? inputPath;
+        for (int i = 0; i < args.length - 1; i++) {
+          if (args[i] == '-i') {
+            final p = args[i + 1];
+            if (p.toLowerCase().endsWith('.rm') || p.toLowerCase().endsWith('.ram')) {
+              inputPath = p;
+              break;
+            }
+            inputPath ??= p;
+          }
+        }
+        final errorMsg = parseFfmpegErrorMessage(
+          stderrBuffer.toString(),
+          inputPath: inputPath,
+          exitCode: exitCode,
+        );
         return FFmpegResult(
           success: false,
-          errorMessage: 'FFmpeg failed (exit code $exitCode): ${stderrBuffer.toString().split('\n').take(5).join(' ')}',
+          errorMessage: errorMsg,
         );
       }
     } catch (e) {
@@ -926,11 +1048,27 @@ class FFmpegService {
             }
           } else {
             final failLogs = await completedSession.getFailStackTrace();
+            final allLogs = await completedSession.getAllLogsAsString();
+            String? inputPath;
+            final matches = RegExp(r'-i\s+["\x27]?([^"\x27]+)["\x27]?').allMatches(command);
+            for (final m in matches) {
+              final p = m.group(1);
+              if (p != null && (p.toLowerCase().endsWith('.rm') || p.toLowerCase().endsWith('.ram'))) {
+                inputPath = p;
+                break;
+              }
+              inputPath ??= p;
+            }
+            final errorMsg = parseFfmpegErrorMessage(
+              allLogs ?? failLogs ?? 'Mobile FFmpeg session failed',
+              inputPath: inputPath,
+              exitCode: returnCode?.getValue(),
+            );
             if (!sessionCompleter.isCompleted) {
               sessionCompleter.complete(
                 FFmpegResult(
                   success: false,
-                  errorMessage: failLogs ?? 'Mobile FFmpeg session failed',
+                  errorMessage: errorMsg,
                 ),
               );
             }
@@ -990,5 +1128,76 @@ class FFmpegService {
       return (hours * 3600) + (minutes * 60) + seconds;
     }
     return null;
+  }
+
+  /// Extracts clean and descriptive error messages from FFmpeg stderr logs,
+  /// specifically providing helpful per-file details when RealMedia codecs fail to decode.
+  static String parseFfmpegErrorMessage(
+    String stderr, {
+    String? inputPath,
+    int? exitCode,
+  }) {
+    final isRealMedia = inputPath != null &&
+        (inputPath.toLowerCase().endsWith('.rm') ||
+         inputPath.toLowerCase().endsWith('.ram'));
+
+    final lines = stderr
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .where((l) =>
+            !l.startsWith('ffmpeg version') &&
+            !l.startsWith('built with') &&
+            !l.startsWith('configuration:') &&
+            !l.startsWith('libavutil') &&
+            !l.startsWith('libavcodec') &&
+            !l.startsWith('libavformat') &&
+            !l.startsWith('libavdevice') &&
+            !l.startsWith('libavfilter') &&
+            !l.startsWith('libswscale') &&
+            !l.startsWith('libswresample') &&
+            !l.startsWith('Press [q] to stop') &&
+            !l.startsWith('Last message repeated'))
+        .toList();
+
+    final errorKeywords = [
+      'Error',
+      'error',
+      'Invalid data',
+      'Decoder not found',
+      'could not find codec',
+      'Could not find codec',
+      'Unsupported codec',
+      'unsupported',
+      'matches no streams',
+      'Conversion failed',
+      'failed',
+      'Invalid argument',
+    ];
+
+    final errorLines = lines.where((l) => errorKeywords.any((kw) => l.contains(kw))).toList();
+
+    String detailedReason = '';
+    if (errorLines.isNotEmpty) {
+      final cleanLines = errorLines
+          .map((l) => l.replaceFirst(RegExp(r'^\[.*?\]\s*'), '').trim())
+          .where((l) => l.isNotEmpty)
+          .toList();
+      detailedReason = cleanLines.isNotEmpty ? cleanLines.last : '';
+    } else if (lines.isNotEmpty) {
+      detailedReason = lines.last.replaceFirst(RegExp(r'^\[.*?\]\s*'), '').trim();
+    }
+
+    if (isRealMedia) {
+      if (detailedReason.isNotEmpty) {
+        return 'RealMedia decoding failed: $detailedReason';
+      }
+      return 'RealMedia decoding failed: Unsupported or corrupted RealMedia codec (exit code ${exitCode ?? 1})';
+    }
+
+    if (detailedReason.isNotEmpty) {
+      return detailedReason;
+    }
+    return 'FFmpeg failed${exitCode != null ? ' (exit code $exitCode)' : ''}';
   }
 }

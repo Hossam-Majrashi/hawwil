@@ -214,7 +214,7 @@ class MobileProgressScreen extends StatelessWidget {
         break;
     }
 
-    final isAudio = item.isAudioInput;
+    final isAudio = item.isAudioInput || item.hasVideoStream == false;
 
     return Card(
       child: Padding(
