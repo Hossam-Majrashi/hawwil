@@ -28,6 +28,7 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
   bool _isMp4 = false;
   Uint8List? _coverBytes;
   bool _coverRemoved = false;
+  bool _isCoverChanged = false;
   bool _isLoading = false;
   bool _isSaving = false;
 
@@ -138,6 +139,7 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
       _filePath = path;
       _fileName = p.basename(path);
       _coverRemoved = false;
+      _isCoverChanged = false;
       _coverWidth = null;
       _coverHeight = null;
       _videoScrubSeconds = 0.0;
@@ -187,6 +189,7 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
       setState(() {
         _coverBytes = frame;
         _coverRemoved = false;
+        _isCoverChanged = true;
       });
       await _decodeCoverDimensions(frame);
     }
@@ -203,6 +206,7 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
       setState(() {
         _coverBytes = imgBytes;
         _coverRemoved = false;
+        _isCoverChanged = true;
       });
       WidgetsBinding.instance.scheduleFrame();
       await _decodeCoverDimensions(imgBytes);
@@ -213,6 +217,7 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
     setState(() {
       _coverBytes = null;
       _coverRemoved = true;
+      _isCoverChanged = true;
       _coverWidth = null;
       _coverHeight = null;
     });
@@ -305,10 +310,14 @@ class _DesktopCoverEditorScreenState extends State<DesktopCoverEditorScreen> {
         filePath: _filePath!,
         newCoverBytes: _coverBytes,
         removeCover: _coverRemoved,
+        replaceVideoFrames: _isCoverChanged && !_coverRemoved && _coverBytes != null,
         title: _titleController.text.trim(),
         artist: _artistController.text.trim(),
         album: _albumController.text.trim(),
       );
+      if (success) {
+        _isCoverChanged = false;
+      }
     } else {
       success = await TagLibService.updateCoverAndMetadata(
         filePath: _filePath!,

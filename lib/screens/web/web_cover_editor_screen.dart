@@ -393,10 +393,21 @@ class _WebCoverEditorScreenState extends State<WebCoverEditorScreen> {
                                           ),
                                         )
                                       : Center(
-                                          child: Text(
-                                            l10n.tr('noCoverInFile'),
-                                            textAlign: TextAlign.center,
-                                            style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                _isMp4 ? Icons.video_file_outlined : Icons.image_not_supported_outlined,
+                                                size: 40,
+                                                color: Colors.grey,
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                l10n.tr('noCoverInFile'),
+                                                textAlign: TextAlign.center,
+                                                style: const TextStyle(fontSize: 11, color: Colors.grey),
+                                              ),
+                                            ],
                                           ),
                                         ),
                                 ),

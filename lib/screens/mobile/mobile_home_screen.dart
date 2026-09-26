@@ -8,6 +8,7 @@ class MobileHomeScreen extends StatelessWidget {
   final BatchConversionService batchService;
   final VoidCallback onCreateProject;
   final VoidCallback onOpenCoverEditor;
+  final VoidCallback onOpenMergeMedia;
   final VoidCallback onOpenSettings;
   final VoidCallback onOpenProgress;
 
@@ -17,6 +18,7 @@ class MobileHomeScreen extends StatelessWidget {
     required this.batchService,
     required this.onCreateProject,
     required this.onOpenCoverEditor,
+    required this.onOpenMergeMedia,
     required this.onOpenSettings,
     required this.onOpenProgress,
   });
@@ -143,6 +145,19 @@ class MobileHomeScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
 
+              // Merge Media Card
+              _buildMobileActionCard(
+                title: l10n.tr('homeMergeMediaTitle'),
+                subtitle: l10n.tr('homeMergeMediaSub'),
+                buttonText: l10n.tr('screenMergeMedia'),
+                icon: Icons.movie_creation_rounded,
+                iconColor: const Color(0xFFF59E0B),
+                onTap: onOpenMergeMedia,
+                theme: theme,
+                isPrimary: false,
+              ),
+              const SizedBox(height: 16),
+
               // Settings Card
               _buildMobileActionCard(
                 title: l10n.tr('homeSettingsTitle'),
@@ -203,11 +218,14 @@ class MobileHomeScreen extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        SizedBox(
+                          height: 34,
+                          child: Text(
+                            subtitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
                         ),
                       ],
                     ),

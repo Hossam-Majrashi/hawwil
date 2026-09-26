@@ -8,6 +8,7 @@ class WebHomeScreen extends StatelessWidget {
   final BatchConversionService batchService;
   final VoidCallback onCreateProject;
   final VoidCallback onOpenCoverEditor;
+  final VoidCallback onOpenMergeMedia;
   final VoidCallback onOpenSettings;
   final VoidCallback onOpenProgress;
 
@@ -17,6 +18,7 @@ class WebHomeScreen extends StatelessWidget {
     required this.batchService,
     required this.onCreateProject,
     required this.onOpenCoverEditor,
+    required this.onOpenMergeMedia,
     required this.onOpenSettings,
     required this.onOpenProgress,
   });
@@ -130,7 +132,7 @@ class WebHomeScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 32),
 
-                      // Action Cards
+                      // Action Cards - strictly equal size
                       Row(
                         children: [
                           Expanded(
@@ -159,6 +161,19 @@ class WebHomeScreen extends StatelessWidget {
                             ),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 24),
+
+                      // Merge Media Card (below the existing two)
+                      _buildWebCard(
+                        title: l10n.tr('homeMergeMediaTitle'),
+                        subtitle: l10n.tr('homeMergeMediaSub'),
+                        buttonLabel: l10n.tr('screenMergeMedia'),
+                        icon: Icons.movie_creation_rounded,
+                        iconColor: const Color(0xFFF59E0B),
+                        onTap: onOpenMergeMedia,
+                        theme: theme,
+                        isDark: isDark,
                       ),
                     ],
                   ),
@@ -206,15 +221,20 @@ class WebHomeScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 8),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  color: isDark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
-                  fontSize: 13,
-                  height: 1.4,
+              SizedBox(
+                height: 40,
+                child: Text(
+                  subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: isDark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
+                    fontSize: 13,
+                    height: 1.4,
+                  ),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
               ElevatedButton.icon(
                 onPressed: onTap,
                 icon: const Icon(Icons.arrow_forward_rounded, size: 16),

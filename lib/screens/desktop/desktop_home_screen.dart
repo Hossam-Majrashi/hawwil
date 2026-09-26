@@ -8,6 +8,7 @@ class DesktopHomeScreen extends StatelessWidget {
   final BatchConversionService batchService;
   final VoidCallback onCreateProject;
   final VoidCallback onOpenCoverEditor;
+  final VoidCallback onOpenMergeMedia;
   final VoidCallback onOpenSettings;
   final VoidCallback onOpenProgress;
   final bool isFFmpegAvailable;
@@ -18,6 +19,7 @@ class DesktopHomeScreen extends StatelessWidget {
     required this.batchService,
     required this.onCreateProject,
     required this.onOpenCoverEditor,
+    required this.onOpenMergeMedia,
     required this.onOpenSettings,
     required this.onOpenProgress,
     this.isFFmpegAvailable = true,
@@ -151,17 +153,15 @@ class DesktopHomeScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 36),
 
-                      // Two Main Action Cards (Create Project, Cover Art Editor) + Settings
+                      // Two Main Action Cards (Create Project, Cover Art Editor) - strictly equal size
                       LayoutBuilder(
                         builder: (context, constraints) {
                           final isWide = constraints.maxWidth > 800;
 
                           if (isWide) {
                             return Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Expanded(
-                                  flex: 5,
                                   child: _buildMainActionCard(
                                     title: l10n.tr('homeCreateProjectTitle'),
                                     subtitle: l10n.tr('homeCreateProjectSub'),
@@ -176,7 +176,6 @@ class DesktopHomeScreen extends StatelessWidget {
                                 ),
                                 const SizedBox(width: 24),
                                 Expanded(
-                                  flex: 4,
                                   child: _buildMainActionCard(
                                     title: l10n.tr('homeCoverEditorTitle'),
                                     subtitle: l10n.tr('homeCoverEditorSub'),
@@ -221,6 +220,20 @@ class DesktopHomeScreen extends StatelessWidget {
                             );
                           }
                         },
+                      ),
+                      const SizedBox(height: 24),
+
+                      // Merge Media Card (below the existing two)
+                      _buildMainActionCard(
+                        title: l10n.tr('homeMergeMediaTitle'),
+                        subtitle: l10n.tr('homeMergeMediaSub'),
+                        buttonLabel: l10n.tr('screenMergeMedia'),
+                        icon: Icons.movie_creation_rounded,
+                        iconColor: const Color(0xFFF59E0B),
+                        onTap: onOpenMergeMedia,
+                        isDark: isDark,
+                        theme: theme,
+                        isPrimary: false,
                       ),
                       const SizedBox(height: 28),
 
@@ -320,14 +333,19 @@ class DesktopHomeScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 8),
-              Text(
-                subtitle,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  height: 1.5,
-                  color: isDark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
+              SizedBox(
+                height: 42,
+                child: Text(
+                  subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    height: 1.5,
+                    color: isDark ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280),
+                  ),
                 ),
               ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 24),
               ElevatedButton.icon(
                 onPressed: onTap,
                 icon: const Icon(Icons.arrow_forward_rounded, size: 18),

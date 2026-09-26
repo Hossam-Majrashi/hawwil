@@ -1098,9 +1098,248 @@ Error opening input files: Invalid data found when processing input
       expect(probe.audioChannels, equals(1)); // Preserved mono (no upmixing)
       expect(probe.audioSampleRate, equals(22050)); // Preserved 22050 Hz (no upsampling)
 
-      // Total size is small (not bloated with 320k audio)
+      // Total size is small (not bloated with 320k audio, includes faststart index)
       final size = await File(mp4Out).length();
-      expect(size, lessThan(40 * 1024));
+      expect(size, lessThan(60 * 1024));
+    });
+  });
+
+  group('Fast Seeking & Keyframe Interval Tests', () {
+    late Directory seekTempDir;
+
+    setUp(() async {
+      seekTempDir = await Directory.systemTemp.createTemp('hawwil_seek_test_');
+    });
+
+    tearDown(() async {
+      if (await seekTempDir.exists()) {
+        try {
+          await seekTempDir.delete(recursive: true);
+        } catch (_) {}
+      }
+    });
+
+    test('getCodecConfigForFormat calculates GOP and keyint_min based on real-time 2s across framerates', () async {
+      // 1. Static image path (2 fps) -> GOP of 4
+      final staticConfig = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        hardwareAcceleration: 'cpu_ultrafast',
+        isStaticImage: true,
+        fps: 2.0,
+      );
+      expect(staticConfig.videoEncoderArgs, contains('-g'));
+      final gIndexStatic = staticConfig.videoEncoderArgs.indexOf('-g');
+      expect(staticConfig.videoEncoderArgs[gIndexStatic + 1], equals('4'));
+      expect(staticConfig.videoEncoderArgs, contains('-keyint_min'));
+      final kIndexStatic = staticConfig.videoEncoderArgs.indexOf('-keyint_min');
+      expect(staticConfig.videoEncoderArgs[kIndexStatic + 1], equals('4'));
+      expect(staticConfig.extraArgs, contains('-movflags'));
+      expect(staticConfig.extraArgs, contains('+faststart'));
+
+      // 2. Static image path at 1 fps -> GOP of 2
+      final static1FpsConfig = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        hardwareAcceleration: 'cpu_ultrafast',
+        isStaticImage: true,
+        fps: 1.0,
+      );
+      final gIndex1 = static1FpsConfig.videoEncoderArgs.indexOf('-g');
+      expect(static1FpsConfig.videoEncoderArgs[gIndex1 + 1], equals('2'));
+
+      // 3. Normal video at 24 fps -> GOP of 48
+      final filmConfig = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        hardwareAcceleration: 'cpu_ultrafast',
+        fps: 24.0,
+      );
+      final gIndexFilm = filmConfig.videoEncoderArgs.indexOf('-g');
+      expect(filmConfig.videoEncoderArgs[gIndexFilm + 1], equals('48'));
+
+      // 4. Normal video at 30 fps -> GOP of 60
+      final tvConfig = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        hardwareAcceleration: 'cpu_ultrafast',
+        fps: 30.0,
+      );
+      final gIndexTv = tvConfig.videoEncoderArgs.indexOf('-g');
+      expect(tvConfig.videoEncoderArgs[gIndexTv + 1], equals('60'));
+
+      // 5. MOV target has +faststart
+      final movConfig = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mov',
+        hardwareAcceleration: 'cpu_ultrafast',
+        fps: 30.0,
+      );
+      expect(movConfig.extraArgs, contains('-movflags'));
+      expect(movConfig.extraArgs, contains('+faststart'));
+
+      // 6. Non-MP4/MOV target (MKV, WebM, AVI) has real-time GOP but no movflags
+      final mkvConfig = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mkv',
+        hardwareAcceleration: 'cpu_ultrafast',
+        fps: 30.0,
+      );
+      expect(mkvConfig.videoEncoderArgs, contains('-g'));
+      expect(mkvConfig.videoEncoderArgs[mkvConfig.videoEncoderArgs.indexOf('-g') + 1], equals('60'));
+      expect(mkvConfig.extraArgs, isNot(contains('-movflags')));
+
+      final webmConfig = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'webm',
+        hardwareAcceleration: 'cpu_ultrafast',
+        fps: 30.0,
+      );
+      expect(webmConfig.videoEncoderArgs, contains('-g'));
+      expect(webmConfig.videoEncoderArgs[webmConfig.videoEncoderArgs.indexOf('-g') + 1], equals('60'));
+      expect(webmConfig.extraArgs, isNot(contains('-movflags')));
+    });
+
+    test('Hardware encoders get real-time keyframe settings', () async {
+      // NVENC
+      final nvenc = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        hardwareAcceleration: 'nvenc',
+        fps: 30.0,
+      );
+      expect(nvenc.videoEncoderArgs, contains('-g'));
+      expect(nvenc.videoEncoderArgs, contains('60'));
+      expect(nvenc.videoEncoderArgs, contains('-forced-idr'));
+      expect(nvenc.extraArgs, contains('+faststart'));
+
+      // VAAPI
+      final vaapi = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        hardwareAcceleration: 'vaapi',
+        fps: 30.0,
+      );
+      expect(vaapi.videoEncoderArgs, contains('-g'));
+      expect(vaapi.videoEncoderArgs, contains('60'));
+      expect(vaapi.videoEncoderArgs, contains('-idr_interval'));
+      expect(vaapi.extraArgs, contains('+faststart'));
+
+      // QSV
+      final qsv = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        hardwareAcceleration: 'qsv',
+        fps: 30.0,
+      );
+      expect(qsv.videoEncoderArgs, contains('-g'));
+      expect(qsv.videoEncoderArgs, contains('60'));
+
+      // VideoToolbox
+      final vt = await FFmpegService.getCodecConfigForFormat(
+        targetFormat: 'mp4',
+        hardwareAcceleration: 'videotoolbox',
+        fps: 30.0,
+      );
+      expect(vt.videoEncoderArgs, contains('-g'));
+      expect(vt.videoEncoderArgs, contains('60'));
+    });
+
+    test('End-to-end: low-fps static image and normal motion video fast seeking (<1s)', () async {
+      final isFfmpegAvailable = await FFmpegService.checkDesktopFFmpeg();
+      if (!isFfmpegAvailable) return;
+
+      // 1. Create a 10-second audio track and cover image for low-fps static-image path
+      final audioPath = '${seekTempDir.path}/audio10s.mp3';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10',
+        '-c:a', 'libmp3lame', '-b:a', '64k',
+        audioPath,
+      ]);
+      final coverPath = '${seekTempDir.path}/cover.png';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'color=c=navy:s=320x240:d=1',
+        '-vframes', '1',
+        coverPath,
+      ]);
+
+      final staticOut = '${seekTempDir.path}/static_out.mp4';
+      final staticRes = await FFmpegService.convertMp3ToVideo(
+        audioPath: audioPath,
+        imagePath: coverPath,
+        outputPath: staticOut,
+        targetFormat: 'mp4',
+      );
+      expect(staticRes.success, isTrue);
+      expect(await File(staticOut).exists(), isTrue);
+
+      // Verify keyframe interval in static-image output: keyframe every 4 frames (at 2 fps = 2.0s)
+      final probeStatic = await Process.run('ffprobe', [
+        '-v', 'error',
+        '-select_streams', 'v',
+        '-show_entries', 'frame=key_frame',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        staticOut,
+      ]);
+      final staticFrames = probeStatic.stdout.toString().trim().split('\n').where((s) => s.isNotEmpty).toList();
+      // At 2 fps for 10 seconds, there are ~20 frames; with GOP=4, frames 0, 4, 8, 12, 16 are keyframes
+      int keyframeCount = staticFrames.where((f) => f == '1').length;
+      expect(keyframeCount, greaterThanOrEqualTo(5)); // ~1 keyframe every 2 seconds
+
+      // Verify fast seek times in static-image output at random points (e.g. 2.5s, 5.0s, 7.5s)
+      for (final seekSec in ['2.5', '5.0', '7.5']) {
+        final stopwatch = Stopwatch()..start();
+        final seekRes = await Process.run('ffmpeg', [
+          '-ss', seekSec,
+          '-i', staticOut,
+          '-vframes', '1',
+          '-f', 'null', '-',
+        ]);
+        stopwatch.stop();
+        expect(seekRes.exitCode, equals(0));
+        // Must resume in well under a second (e.g. < 500ms)
+        expect(stopwatch.elapsedMilliseconds, lessThan(1000));
+      }
+
+      // 2. Create a 10-second 30 fps normal motion video
+      final motionSrc = '${seekTempDir.path}/motion_src.mkv';
+      await Process.run('ffmpeg', [
+        '-y',
+        '-f', 'lavfi', '-i', 'testsrc=duration=10:size=320x240:rate=30',
+        '-f', 'lavfi', '-i', 'sine=frequency=880:duration=10',
+        '-c:v', 'libx264', '-preset', 'ultrafast',
+        '-c:a', 'aac',
+        motionSrc,
+      ]);
+
+      final motionOut = '${seekTempDir.path}/motion_out.mp4';
+      final motionRes = await FFmpegService.convertVideoToVideo(
+        videoPath: motionSrc,
+        outputPath: motionOut,
+        targetFormat: 'mp4',
+      );
+      expect(motionRes.success, isTrue);
+      expect(await File(motionOut).exists(), isTrue);
+
+      // Verify keyframe interval in motion output: keyframe every 60 frames (at 30 fps = 2.0s)
+      final probeMotion = await Process.run('ffprobe', [
+        '-v', 'error',
+        '-select_streams', 'v',
+        '-show_entries', 'frame=key_frame',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        motionOut,
+      ]);
+      final motionFrames = probeMotion.stdout.toString().trim().split('\n').where((s) => s.isNotEmpty).toList();
+      // At 30 fps for 10 seconds, there are 300 frames; with GOP=60, ~5 keyframes
+      int motionKeyframes = motionFrames.where((f) => f == '1').length;
+      expect(motionKeyframes, greaterThanOrEqualTo(5));
+
+      // Verify fast seek times in motion video output at random points (e.g. 1.8s, 4.3s, 8.1s)
+      for (final seekSec in ['1.8', '4.3', '8.1']) {
+        final stopwatch = Stopwatch()..start();
+        final seekRes = await Process.run('ffmpeg', [
+          '-ss', seekSec,
+          '-i', motionOut,
+          '-vframes', '1',
+          '-f', 'null', '-',
+        ]);
+        stopwatch.stop();
+        expect(seekRes.exitCode, equals(0));
+        // Must resume in well under a second (e.g. < 500ms)
+        expect(stopwatch.elapsedMilliseconds, lessThan(1000));
+      }
     });
   });
 }

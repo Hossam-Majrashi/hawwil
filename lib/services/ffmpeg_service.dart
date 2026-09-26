@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import '../models/merge_media_item.dart';
+import '../models/conversion_item.dart';
 
 class HwAccelInfo {
   final bool hasNvenc;
@@ -187,7 +190,33 @@ class FFmpegService {
     }
   }
 
-  /// Extract a single frame from video at the given scrub timestamp (in seconds)
+  /// Checks whether an image is completely or virtually pitch black (e.g. uninitialized frame or fade-in)
+  static Future<bool> isImageVisuallyBlack(Uint8List bytes) async {
+    if (bytes.length < 50) return true;
+    try {
+      final codec = await ui.instantiateImageCodec(bytes, targetWidth: 32, targetHeight: 32);
+      final frame = await codec.getNextFrame();
+      final bd = await frame.image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (bd == null) return false;
+      final rgba = bd.buffer.asUint8List();
+      int totalLuma = 0;
+      final pixelCount = rgba.length ~/ 4;
+      if (pixelCount == 0) return true;
+      for (int i = 0; i < rgba.length; i += 4) {
+        final r = rgba[i];
+        final g = rgba[i + 1];
+        final b = rgba[i + 2];
+        totalLuma += (r * 299 + g * 587 + b * 114) ~/ 1000;
+      }
+      final avgLuma = totalLuma / pixelCount;
+      return avgLuma < 8.0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Extract a single frame from video at the given scrub timestamp (in seconds).
+  /// When timestampSeconds <= 0.0, sequentially decodes the first frame without fast-seek before -i.
   static Future<Uint8List?> extractVideoFrame({
     required String videoPath,
     double timestampSeconds = 0.0,
@@ -201,21 +230,34 @@ class FFmpegService {
         'frame_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
 
-      final formattedTime = _formatSecondsToTimestamp(timestampSeconds);
-
       if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-        final args = [
-          '-y',
-          '-ss',
-          formattedTime,
-          '-i',
-          videoPath,
-          '-frames:v',
-          '1',
-          '-q:v',
-          '2',
-          outImagePath,
-        ];
+        final List<String> args;
+        if (timestampSeconds <= 0.0) {
+          args = [
+            '-y',
+            '-i',
+            videoPath,
+            '-frames:v',
+            '1',
+            '-q:v',
+            '2',
+            outImagePath,
+          ];
+        } else {
+          final formattedTime = _formatSecondsToTimestamp(timestampSeconds);
+          args = [
+            '-y',
+            '-ss',
+            formattedTime,
+            '-i',
+            videoPath,
+            '-frames:v',
+            '1',
+            '-q:v',
+            '2',
+            outImagePath,
+          ];
+        }
 
         final process = await Process.run('ffmpeg', args);
         if (process.exitCode == 0 && await File(outImagePath).exists()) {
@@ -224,10 +266,17 @@ class FFmpegService {
             await File(outImagePath).delete();
           } catch (_) {}
           return bytes;
+        } else if (timestampSeconds > 0) {
+          return await extractVideoFrame(videoPath: videoPath, timestampSeconds: 0.0);
         }
       } else if (Platform.isAndroid || Platform.isIOS) {
-        final cmd =
-            '-y -ss $formattedTime -i "$videoPath" -frames:v 1 -q:v 2 "$outImagePath"';
+        final String cmd;
+        if (timestampSeconds <= 0.0) {
+          cmd = '-y -i "$videoPath" -frames:v 1 -q:v 2 "$outImagePath"';
+        } else {
+          final formattedTime = _formatSecondsToTimestamp(timestampSeconds);
+          cmd = '-y -ss $formattedTime -i "$videoPath" -frames:v 1 -q:v 2 "$outImagePath"';
+        }
         final session = await FFmpegKit.execute(cmd);
         final returnCode = await session.getReturnCode();
         if (ReturnCode.isSuccess(returnCode) &&
@@ -237,6 +286,8 @@ class FFmpegService {
             await File(outImagePath).delete();
           } catch (_) {}
           return bytes;
+        } else if (timestampSeconds > 0) {
+          return await extractVideoFrame(videoPath: videoPath, timestampSeconds: 0.0);
         }
       }
     } catch (e) {
@@ -245,7 +296,7 @@ class FFmpegService {
     return null;
   }
 
-  /// Extract cover art from MP4 (first checking embedded attached_pic, fallback to video frame)
+  /// Extract cover art from MP4 (first checking embedded attached_pic, fallback to video's first non-black frame)
   static Future<Uint8List?> extractMp4CoverOrFrame({
     required String videoPath,
     double timestampSeconds = 0.0,
@@ -259,7 +310,7 @@ class FFmpegService {
         'mp4_cover_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
 
-      // Check if MP4 has an attached_pic stream
+      // 1. Check if MP4 has an attached_pic stream
       if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
         try {
           final probe = await Process.run('ffprobe', [
@@ -295,19 +346,56 @@ class FFmpegService {
                 if (extractRes.exitCode == 0 && await File(outImagePath).exists()) {
                   final bytes = await File(outImagePath).readAsBytes();
                   try { await File(outImagePath).delete(); } catch (_) {}
-                  return bytes;
+                  if (bytes.isNotEmpty && !(await isImageVisuallyBlack(bytes))) {
+                    return bytes;
+                  }
                 }
               }
             }
           }
         } catch (_) {}
+      } else if (Platform.isAndroid || Platform.isIOS) {
+        try {
+          final cmd = '-y -i "$videoPath" -map 0:v:attached_pic? -c copy "$outImagePath"';
+          final session = await FFmpegKit.execute(cmd);
+          if (ReturnCode.isSuccess(await session.getReturnCode()) &&
+              await File(outImagePath).exists() &&
+              (await File(outImagePath).length()) > 0) {
+            final bytes = await File(outImagePath).readAsBytes();
+            try { await File(outImagePath).delete(); } catch (_) {}
+            if (bytes.isNotEmpty && !(await isImageVisuallyBlack(bytes))) {
+              return bytes;
+            }
+          }
+        } catch (_) {}
       }
 
-      // Fallback: extract frame from video
-      return await extractVideoFrame(
+      // 2. Fallback: extract frame from video (defaults to video's own first frame)
+      var frame = await extractVideoFrame(
         videoPath: videoPath,
         timestampSeconds: timestampSeconds,
       );
+
+      // If the extracted frame is visually black and we requested default/start,
+      // search slightly forward to get the first visible frame instead of a black screen
+      if (frame != null && timestampSeconds <= 0.0 && (await isImageVisuallyBlack(frame))) {
+        final dur = await getMediaDuration(videoPath) ?? 1.0;
+        final probeSeconds = [0.1, 0.5, 1.0, 2.0];
+        for (final sec in probeSeconds) {
+          if (sec < dur) {
+            final nextFrame = await extractVideoFrame(
+              videoPath: videoPath,
+              timestampSeconds: sec,
+            );
+            if (nextFrame != null && !(await isImageVisuallyBlack(nextFrame))) {
+              frame = nextFrame;
+              break;
+            }
+          }
+        }
+      }
+
+      return frame;
     } catch (e) {
       debugPrint('extractMp4CoverOrFrame error: $e');
       return null;
@@ -338,11 +426,16 @@ class FFmpegService {
     return result;
   }
 
-  /// Update cover art and metadata tags in an MP4 file in-place (Lossless & Instant via -c copy)
+  /// Update cover art and metadata tags in a video file.
+  /// When [newCoverBytes] is provided and [replaceVideoFrames] is true (e.g. user picked an image in Cover Editor),
+  /// the image becomes both the video's cover/thumbnail AND its entire visual content throughout its duration
+  /// by reusing the static-image video pipeline (`convertMp3ToVideo`), preserving the original audio track.
+  /// When [replaceVideoFrames] is false or [newCoverBytes] is null, updates tags and/or removes cover in-place via `-c copy`.
   static Future<bool> updateMp4CoverAndMetadata({
     required String filePath,
     Uint8List? newCoverBytes,
     bool removeCover = false,
+    bool replaceVideoFrames = true,
     String? title,
     String? artist,
     String? album,
@@ -350,19 +443,40 @@ class FFmpegService {
     if (kIsWeb) return false;
 
     File? tempImageFile;
-    final tempOutPath = '$filePath.tmp_hawwil_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    final ext = p.extension(filePath).toLowerCase().replaceAll('.', '');
+    final targetFmt = ext.isNotEmpty ? ext : 'mp4';
+    final tempOutPath = '$filePath.tmp_hawwil_${DateTime.now().millisecondsSinceEpoch}.${targetFmt == 'matroska' ? 'mkv' : targetFmt}';
 
     try {
-      final List<String> args = ['-y'];
-
       if (!removeCover && newCoverBytes != null && newCoverBytes.isNotEmpty) {
         final tempDir = await getTemporaryDirectory();
         tempImageFile = File(
           p.join(tempDir.path, 'temp_cover_${DateTime.now().millisecondsSinceEpoch}.jpg'),
         );
         await tempImageFile.writeAsBytes(newCoverBytes);
+
+        if (replaceVideoFrames) {
+          final res = await convertMp3ToVideo(
+            audioPath: filePath,
+            imagePath: tempImageFile.path,
+            outputPath: tempOutPath,
+            targetFormat: targetFmt,
+            title: title,
+            artist: artist,
+            album: album,
+          );
+
+          if (res.success && await File(tempOutPath).exists()) {
+            await File(tempOutPath).rename(filePath);
+            return true;
+          } else {
+            debugPrint('updateMp4CoverAndMetadata replaceVideoFrames failed: ${res.errorMessage}');
+            return false;
+          }
+        }
       }
 
+      final List<String> args = ['-y'];
       args.addAll(['-i', filePath]);
 
       if (!removeCover && tempImageFile != null) {
@@ -373,16 +487,19 @@ class FFmpegService {
           '-map', '1:v',
           '-c', 'copy',
           '-disposition:v:1', 'attached_pic',
+          '-movflags', '+faststart',
         ]);
       } else if (removeCover) {
         args.addAll([
           '-map', '0:v:0',
           '-map', '0:a?',
           '-c', 'copy',
+          '-movflags', '+faststart',
         ]);
       } else {
         args.addAll([
           '-c', 'copy',
+          '-movflags', '+faststart',
         ]);
       }
 
@@ -868,6 +985,7 @@ class FFmpegService {
     int? maxRateKbps,
     int? audioSampleRate,
     int? audioChannels,
+    double? fps,
   }) async {
     final fmt = targetFormat.toLowerCase().replaceAll('.', '');
     final hw = await detectHardwareAcceleration();
@@ -875,6 +993,12 @@ class FFmpegService {
     final useVaapi = (hardwareAcceleration == 'auto' && !hw.hasNvenc && hw.hasVaapi) || hardwareAcceleration == 'vaapi';
     final useQsv = (hardwareAcceleration == 'auto' && !hw.hasNvenc && !hw.hasVaapi && hw.hasQsv) || hardwareAcceleration == 'qsv';
     final useVideoToolbox = (hardwareAcceleration == 'auto' && !hw.hasNvenc && !hw.hasVaapi && !hw.hasQsv && hw.hasVideoToolbox && Platform.isMacOS) || hardwareAcceleration == 'videotoolbox';
+
+    final effectiveFps = (fps != null && fps > 0)
+        ? fps
+        : (isStaticImage ? 2.0 : 30.0);
+    final gopSize = (effectiveFps * 2).round().clamp(1, 600);
+    final gopStr = '$gopSize';
 
     int? requestedKbps;
     if (videoBitrate != null && videoBitrate != 'auto' && videoBitrate.isNotEmpty) {
@@ -888,6 +1012,8 @@ class FFmpegService {
       case 'webm':
         final List<String> vArgs = [
           '-c:v', 'libvpx-vp9',
+          '-g', gopStr,
+          '-keyint_min', gopStr,
           '-deadline', 'realtime',
           '-cpu-used', '8',
         ];
@@ -915,6 +1041,8 @@ class FFmpegService {
         final List<String> vArgs = [
           '-c:v', 'mpeg4',
           '-vtag', 'XVID',
+          '-g', gopStr,
+          '-keyint_min', gopStr,
         ];
         if (requestedKbps != null) {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -939,6 +1067,8 @@ class FFmpegService {
       case 'wmv':
         final List<String> vArgs = [
           '-c:v', 'wmv2',
+          '-g', gopStr,
+          '-keyint_min', gopStr,
         ];
         if (requestedKbps != null) {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -966,6 +1096,8 @@ class FFmpegService {
           '-preset', 'ultrafast',
           if (isStaticImage) ...['-tune', 'stillimage'],
           '-threads', '0',
+          '-g', gopStr,
+          '-keyint_min', gopStr,
         ];
         if (requestedKbps != null) {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -990,6 +1122,8 @@ class FFmpegService {
       case 'ogv':
         final List<String> vArgs = [
           '-c:v', 'libtheora',
+          '-g', gopStr,
+          '-keyint_min', gopStr,
         ];
         if (requestedKbps != null) {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -1012,6 +1146,8 @@ class FFmpegService {
       case 'mpeg':
         final List<String> vArgs = [
           '-c:v', 'mpeg2video',
+          '-g', gopStr,
+          '-keyint_min', gopStr,
         ];
         if (requestedKbps != null) {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -1038,13 +1174,20 @@ class FFmpegService {
       case 'mp4':
       default:
         final List<String> vArgs = [];
-        final List<String> extras = ['-pix_fmt', 'yuv420p'];
+        final bool isFastStartContainer = fmt == 'mp4' || fmt == 'mov' || fmt == 'm4v' || (fmt != 'mkv');
+        final List<String> extras = [
+          '-pix_fmt', 'yuv420p',
+          if (isFastStartContainer) ...['-movflags', '+faststart'],
+        ];
 
         if (useNvenc) {
           vArgs.addAll([
             '-c:v', 'h264_nvenc',
             '-preset', 'p1',
             '-tune', 'ull',
+            '-g', gopStr,
+            '-keyint_min', gopStr,
+            '-forced-idr', '1',
           ]);
           if (requestedKbps != null) {
             vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -1061,6 +1204,8 @@ class FFmpegService {
         } else if (useQsv) {
           vArgs.addAll([
             '-c:v', 'h264_qsv',
+            '-g', gopStr,
+            '-keyint_min', gopStr,
           ]);
           if (requestedKbps != null) {
             vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -1075,6 +1220,8 @@ class FFmpegService {
         } else if (useVideoToolbox) {
           vArgs.addAll([
             '-c:v', 'h264_videotoolbox',
+            '-g', gopStr,
+            '-keyint_min', gopStr,
           ]);
           if (requestedKbps != null) {
             vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -1092,6 +1239,8 @@ class FFmpegService {
           vArgs.addAll([
             '-vf', 'format=nv12,hwupload',
             '-c:v', 'h264_vaapi',
+            '-g', gopStr,
+            '-idr_interval', '1',
           ]);
           if (requestedKbps != null) {
             vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -1110,6 +1259,8 @@ class FFmpegService {
             '-preset', 'ultrafast',
             if (isStaticImage) ...['-tune', 'stillimage'],
             '-threads', '0',
+            '-g', gopStr,
+            '-keyint_min', gopStr,
           ]);
           if (requestedKbps != null) {
             vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -1149,6 +1300,9 @@ class FFmpegService {
     String? videoBitrate,
     String? audioBitrate,
     String hardwareAcceleration = 'auto',
+    String? title,
+    String? artist,
+    String? album,
     void Function(double progress)? onProgress,
     Completer<void>? cancelCompleter,
   }) async {
@@ -1161,9 +1315,22 @@ class FFmpegService {
 
     final durationSec = await getMediaDuration(audioPath) ?? 180.0;
     final audioInfo = await probeMedia(audioPath);
-    final finalRes = (resolution == null || resolution == 'original' || resolution.isEmpty)
-        ? '1920x1080'
-        : resolution;
+
+    // If resolution is not explicitly given, cap to source dimensions if available, otherwise default to 1920x1080
+    final String finalRes;
+    if (resolution == null || resolution == 'original' || resolution.isEmpty) {
+      if (audioInfo.width != null && audioInfo.height != null) {
+        final w = audioInfo.width!;
+        final h = audioInfo.height!;
+        final evenW = w.isEven ? w : w - 1;
+        final evenH = h.isEven ? h : h - 1;
+        finalRes = '${evenW}x$evenH';
+      } else {
+        finalRes = '1920x1080';
+      }
+    } else {
+      finalRes = resolution;
+    }
 
     String? explicitAudioBitrate;
     if (audioBitrate != null && audioBitrate != 'auto' && audioBitrate.isNotEmpty) {
@@ -1178,6 +1345,7 @@ class FFmpegService {
       audioChannels: audioInfo.audioChannels,
       hardwareAcceleration: hardwareAcceleration,
       isStaticImage: true,
+      fps: 2.0,
       maxRateKbps: null,
     );
 
@@ -1190,10 +1358,13 @@ class FFmpegService {
         '-i', imagePath,
         '-i', audioPath,
         '-map', '0:v:0',
-        '-map', '1:a:0',
+        '-map', '1:a:0?',
         ...codecConfig.extraArgs,
         ...codecConfig.videoEncoderArgs,
         ...codecConfig.audioEncoderArgs,
+        if (title != null && title.isNotEmpty) ...['-metadata', 'title=$title'],
+        if (artist != null && artist.isNotEmpty) ...['-metadata', 'artist=$artist'],
+        if (album != null && album.isNotEmpty) ...['-metadata', 'album=$album'],
         '-s', finalRes,
         '-r', '2',
         '-shortest',
@@ -1216,10 +1387,13 @@ class FFmpegService {
         '-i', '"$imagePath"',
         '-i', '"$audioPath"',
         '-map', '0:v:0',
-        '-map', '1:a:0',
+        '-map', '1:a:0?',
         ...codecConfig.extraArgs,
         ...codecConfig.videoEncoderArgs,
         ...codecConfig.audioEncoderArgs,
+        if (title != null && title.isNotEmpty) '-metadata "title=$title"',
+        if (artist != null && artist.isNotEmpty) '-metadata "artist=$artist"',
+        if (album != null && album.isNotEmpty) '-metadata "album=$album"',
         '-s', finalRes,
         '-r', '2',
         '-shortest',
@@ -1341,6 +1515,7 @@ class FFmpegService {
       audioChannels: sourceInfo.audioChannels,
       hardwareAcceleration: hardwareAcceleration,
       isStaticImage: false,
+      fps: sourceInfo.fps,
       maxRateKbps: maxRateKbps,
     );
 
@@ -1382,6 +1557,392 @@ class FFmpegService {
       return _runMobileConversion(
         command: cmd,
         totalDurationSeconds: durationSec,
+        outputPath: outputPath,
+        onProgress: onProgress,
+        cancelCompleter: cancelCompleter,
+      );
+    }
+  }
+
+  /// Merges multiple visual items (images and videos in sequence) with optional soundtrack audio clips
+  static Future<FFmpegResult> mergeMedia({
+    required List<MergeMediaItem> visualItems,
+    List<MergeMediaItem> audioItems = const [],
+    required String outputPath,
+    String targetFormat = 'mp4',
+    String? resolution,
+    String? videoBitrate,
+    String? audioBitrate,
+    String hardwareAcceleration = 'auto',
+    void Function(double progress)? onProgress,
+    Completer<void>? cancelCompleter,
+  }) async {
+    if (kIsWeb) {
+      return FFmpegResult(
+        success: false,
+        errorMessage: 'Web platform does not support local FFmpeg encoding.',
+      );
+    }
+
+    if (visualItems.isEmpty && audioItems.isEmpty) {
+      return FFmpegResult(
+        success: false,
+        errorMessage: 'No media items provided for merge.',
+      );
+    }
+
+    // Try with requested hardware acceleration, falling back to CPU if it fails
+    final res = await _executeMergeMedia(
+      visualItems: visualItems,
+      audioItems: audioItems,
+      outputPath: outputPath,
+      targetFormat: targetFormat,
+      resolution: resolution,
+      videoBitrate: videoBitrate,
+      audioBitrate: audioBitrate,
+      hardwareAcceleration: hardwareAcceleration,
+      onProgress: onProgress,
+      cancelCompleter: cancelCompleter,
+    );
+
+    if (!res.success &&
+        hardwareAcceleration != 'cpu' &&
+        (cancelCompleter == null || !cancelCompleter.isCompleted)) {
+      return await _executeMergeMedia(
+        visualItems: visualItems,
+        audioItems: audioItems,
+        outputPath: outputPath,
+        targetFormat: targetFormat,
+        resolution: resolution,
+        videoBitrate: videoBitrate,
+        audioBitrate: audioBitrate,
+        hardwareAcceleration: 'cpu',
+        onProgress: onProgress,
+        cancelCompleter: cancelCompleter,
+      );
+    }
+
+    return res;
+  }
+
+  static Future<FFmpegResult> _executeMergeMedia({
+    required List<MergeMediaItem> visualItems,
+    required List<MergeMediaItem> audioItems,
+    required String outputPath,
+    required String targetFormat,
+    String? resolution,
+    String? videoBitrate,
+    String? audioBitrate,
+    required String hardwareAcceleration,
+    void Function(double progress)? onProgress,
+    Completer<void>? cancelCompleter,
+  }) async {
+    final cleanFormat = targetFormat.toLowerCase().replaceAll('.', '');
+    final isAudioOutput = ConversionItem.supportedAudioOutputFormats.contains(cleanFormat);
+
+    // 1. Audio-only output format (e.g. mp3, aac, wav, flac, ogg, opus)
+    if (isAudioOutput) {
+      final audioSources = <MergeMediaItem>[];
+      if (audioItems.isNotEmpty) {
+        audioSources.addAll(audioItems);
+      } else if (visualItems.isNotEmpty) {
+        for (final item in visualItems) {
+          if (item.isVideo) {
+            final info = await probeMedia(item.path);
+            if (info.audioChannels != null && info.audioChannels! > 0) {
+              audioSources.add(item);
+            }
+          }
+        }
+      }
+
+      if (audioSources.isEmpty) {
+        return FFmpegResult(
+          success: false,
+          errorMessage: 'No audio streams found in timeline to export.',
+        );
+      }
+
+      final nSources = audioSources.length;
+      final filterParts = <String>[];
+      for (int j = 0; j < nSources; j++) {
+        filterParts.add('[$j:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a$j]');
+      }
+      final audioConcatStreams = List.generate(nSources, (j) => '[a$j]').join('');
+      filterParts.add('${audioConcatStreams}concat=n=$nSources:v=0:a=1[aout]');
+      final filterComplex = filterParts.join(';');
+
+      final audioEncoderArgs = buildAudioEncoderArgs(
+        targetFormat: cleanFormat,
+        audioBitrate: audioBitrate,
+      );
+
+      final totalDuration = audioSources.fold<double>(
+        0.0,
+        (acc, item) => acc + item.durationInSeconds,
+      );
+
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        final List<String> inputs = [];
+        for (final item in audioSources) {
+          inputs.addAll(['-i', item.path]);
+        }
+        final desktopArgs = [
+          '-y',
+          '-threads', '0',
+          ...inputs,
+          '-filter_complex', filterComplex,
+          '-map', '[aout]',
+          ...audioEncoderArgs,
+          outputPath,
+        ];
+        return _runDesktopConversion(
+          args: desktopArgs,
+          totalDurationSeconds: totalDuration,
+          outputPath: outputPath,
+          onProgress: onProgress,
+          cancelCompleter: cancelCompleter,
+        );
+      } else {
+        final mobileInputs = <String>[];
+        for (final item in audioSources) {
+          mobileInputs.add('-i "${item.path}"');
+        }
+        final cmd = [
+          '-y',
+          '-threads 0',
+          ...mobileInputs,
+          '-filter_complex "$filterComplex"',
+          '-map "[aout]"',
+          ...audioEncoderArgs,
+          '"$outputPath"',
+        ].join(' ');
+        return _runMobileConversion(
+          command: cmd,
+          totalDurationSeconds: totalDuration,
+          outputPath: outputPath,
+          onProgress: onProgress,
+          cancelCompleter: cancelCompleter,
+        );
+      }
+    }
+
+    // 2. Video output format (mp4, mkv, mov, webm, avi, flv, wmv, mpg, mpeg, ogv)
+    int targetW = 1920;
+    int targetH = 1080;
+    if (resolution != null && resolution.contains('x')) {
+      final parts = resolution.split('x');
+      final w = int.tryParse(parts[0]);
+      final h = int.tryParse(parts[1]);
+      if (w != null && h != null && w > 0 && h > 0) {
+        targetW = w;
+        targetH = h;
+      }
+    }
+
+    final codecConfig = await getCodecConfigForFormat(
+      targetFormat: cleanFormat,
+      videoBitrate: videoBitrate,
+      audioBitrate: audioBitrate,
+      hardwareAcceleration: hardwareAcceleration,
+      isStaticImage: false,
+      fps: 30.0,
+    );
+
+    // 2A. Audio-only project exported to video format (render black visual canvas)
+    if (visualItems.isEmpty && audioItems.isNotEmpty) {
+      final totalAudioDuration = audioItems.fold<double>(
+        0.0,
+        (acc, item) => acc + item.durationInSeconds,
+      );
+      final nAudio = audioItems.length;
+      final filterParts = <String>[];
+      filterParts.add('color=c=black:s=${targetW}x$targetH:d=${totalAudioDuration.toStringAsFixed(3)}:r=30[vout]');
+      for (int j = 0; j < nAudio; j++) {
+        filterParts.add('[$j:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a$j]');
+      }
+      final audioConcatStreams = List.generate(nAudio, (j) => '[a$j]').join('');
+      filterParts.add('${audioConcatStreams}concat=n=$nAudio:v=0:a=1[aout]');
+      final filterComplex = filterParts.join(';');
+
+      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+        final List<String> inputs = [];
+        for (final item in audioItems) {
+          inputs.addAll(['-i', item.path]);
+        }
+        final desktopArgs = [
+          '-y',
+          '-threads', '0',
+          ...inputs,
+          '-filter_complex', filterComplex,
+          '-map', '[vout]',
+          '-map', '[aout]',
+          ...codecConfig.extraArgs,
+          ...codecConfig.videoEncoderArgs,
+          ...codecConfig.audioEncoderArgs,
+          '-shortest',
+          outputPath,
+        ];
+        return _runDesktopConversion(
+          args: desktopArgs,
+          totalDurationSeconds: totalAudioDuration,
+          outputPath: outputPath,
+          onProgress: onProgress,
+          cancelCompleter: cancelCompleter,
+        );
+      } else {
+        final mobileInputs = <String>[];
+        for (final item in audioItems) {
+          mobileInputs.add('-i "${item.path}"');
+        }
+        final cmd = [
+          '-y',
+          '-threads 0',
+          ...mobileInputs,
+          '-filter_complex "$filterComplex"',
+          '-map "[vout]"',
+          '-map "[aout]"',
+          ...codecConfig.extraArgs,
+          ...codecConfig.videoEncoderArgs,
+          ...codecConfig.audioEncoderArgs,
+          '-shortest',
+          '"$outputPath"',
+        ].join(' ');
+        return _runMobileConversion(
+          command: cmd,
+          totalDurationSeconds: totalAudioDuration,
+          outputPath: outputPath,
+          onProgress: onProgress,
+          cancelCompleter: cancelCompleter,
+        );
+      }
+    }
+
+    // 2B. Visual items are present (videos, images, or both)
+    final totalVisualDuration = visualItems.fold<double>(
+      0.0,
+      (acc, item) => acc + item.durationInSeconds,
+    );
+
+    final nVisual = visualItems.length;
+    final nAudio = audioItems.length;
+
+    final filterParts = <String>[];
+    for (int i = 0; i < nVisual; i++) {
+      filterParts.add('[$i:v]scale=$targetW:$targetH:force_original_aspect_ratio=decrease,pad=$targetW:$targetH:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v$i]');
+    }
+
+    final visualConcatStreams = List.generate(nVisual, (i) => '[v$i]').join('');
+    filterParts.add('${visualConcatStreams}concat=n=$nVisual:v=1:a=0[vout]');
+
+    if (nAudio > 0) {
+      for (int j = 0; j < nAudio; j++) {
+        final idx = nVisual + j;
+        filterParts.add('[$idx:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a$j]');
+      }
+      final audioConcatStreams = List.generate(nAudio, (j) => '[a$j]').join('');
+      filterParts.add('${audioConcatStreams}concat=n=$nAudio:v=0:a=1,apad[aout]');
+    } else {
+      // Check if visual items have audio streams (e.g. video files without separate audio track)
+      final hasAnyVideoWithAudio = <int, bool>{};
+      for (int i = 0; i < nVisual; i++) {
+        if (visualItems[i].isVideo) {
+          final info = await probeMedia(visualItems[i].path);
+          if (info.audioChannels != null && info.audioChannels! > 0) {
+            hasAnyVideoWithAudio[i] = true;
+          }
+        }
+      }
+
+      if (hasAnyVideoWithAudio.isNotEmpty) {
+        for (int i = 0; i < nVisual; i++) {
+          if (hasAnyVideoWithAudio[i] == true) {
+            filterParts.add('[$i:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[va$i]');
+          } else {
+            filterParts.add('anullsrc=r=44100:cl=stereo:d=${visualItems[i].durationInSeconds.toStringAsFixed(3)}[va$i]');
+          }
+        }
+        final vAudioConcatStreams = List.generate(nVisual, (i) => '[va$i]').join('');
+        filterParts.add('${vAudioConcatStreams}concat=n=$nVisual:v=0:a=1[aout]');
+      } else {
+        filterParts.add('anullsrc=r=44100:cl=stereo:d=${totalVisualDuration.toStringAsFixed(3)}[aout]');
+      }
+    }
+
+    final filterComplex = filterParts.join(';');
+
+    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+      final List<String> inputs = [];
+      for (final item in visualItems) {
+        if (item.isImage) {
+          inputs.addAll([
+            '-loop', '1',
+            '-t', item.durationInSeconds.toStringAsFixed(3),
+            '-i', item.path,
+          ]);
+        } else {
+          inputs.addAll([
+            '-i', item.path,
+          ]);
+        }
+      }
+      for (final item in audioItems) {
+        inputs.addAll([
+          '-i', item.path,
+        ]);
+      }
+
+      final desktopArgs = [
+        '-y',
+        '-threads', '0',
+        ...inputs,
+        '-filter_complex', filterComplex,
+        '-map', '[vout]',
+        '-map', '[aout]',
+        ...codecConfig.extraArgs,
+        ...codecConfig.videoEncoderArgs,
+        ...codecConfig.audioEncoderArgs,
+        '-shortest',
+        outputPath,
+      ];
+
+      return _runDesktopConversion(
+        args: desktopArgs,
+        totalDurationSeconds: totalVisualDuration,
+        outputPath: outputPath,
+        onProgress: onProgress,
+        cancelCompleter: cancelCompleter,
+      );
+    } else {
+      final mobileInputs = <String>[];
+      for (final item in visualItems) {
+        if (item.isImage) {
+          mobileInputs.add('-loop 1 -t ${item.durationInSeconds.toStringAsFixed(3)} -i "${item.path}"');
+        } else {
+          mobileInputs.add('-i "${item.path}"');
+        }
+      }
+      for (final item in audioItems) {
+        mobileInputs.add('-i "${item.path}"');
+      }
+
+      final cmd = [
+        '-y',
+        '-threads 0',
+        ...mobileInputs,
+        '-filter_complex "$filterComplex"',
+        '-map "[vout]"',
+        '-map "[aout]"',
+        ...codecConfig.extraArgs,
+        ...codecConfig.videoEncoderArgs,
+        ...codecConfig.audioEncoderArgs,
+        '-shortest',
+        '"$outputPath"',
+      ].join(' ');
+
+      return _runMobileConversion(
+        command: cmd,
+        totalDurationSeconds: totalVisualDuration,
         outputPath: outputPath,
         onProgress: onProgress,
         cancelCompleter: cancelCompleter,

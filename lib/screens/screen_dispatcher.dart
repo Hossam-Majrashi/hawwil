@@ -14,6 +14,7 @@ import 'desktop/desktop_home_screen.dart';
 import 'desktop/desktop_create_project_screen.dart';
 import 'desktop/desktop_progress_screen.dart';
 import 'desktop/desktop_cover_editor_screen.dart';
+import 'desktop/desktop_merge_media_screen.dart';
 import 'desktop/desktop_settings_screen.dart';
 
 // Mobile screens
@@ -24,6 +25,7 @@ import 'mobile/mobile_home_screen.dart';
 import 'mobile/mobile_create_project_screen.dart';
 import 'mobile/mobile_progress_screen.dart';
 import 'mobile/mobile_cover_editor_screen.dart';
+import 'mobile/mobile_merge_media_screen.dart';
 import 'mobile/mobile_settings_screen.dart';
 
 // Web screens
@@ -34,6 +36,7 @@ import 'web/web_home_screen.dart';
 import 'web/web_create_project_screen.dart';
 import 'web/web_progress_screen.dart';
 import 'web/web_cover_editor_screen.dart';
+import 'web/web_merge_media_screen.dart';
 import 'web/web_settings_screen.dart';
 
 enum AppScreenRoute {
@@ -45,6 +48,7 @@ enum AppScreenRoute {
   createProject,
   progress,
   coverEditor,
+  mergeMedia,
   settings,
 }
 
@@ -194,6 +198,7 @@ class _ScreenDispatcherState extends State<ScreenDispatcher> {
           isFFmpegAvailable: _isFFmpegAvailable,
           onCreateProject: _startNewProject,
           onOpenCoverEditor: () => _navigateTo(AppScreenRoute.coverEditor),
+          onOpenMergeMedia: () => _navigateTo(AppScreenRoute.mergeMedia),
           onOpenSettings: () => _navigateTo(AppScreenRoute.settings),
           onOpenProgress: () => _navigateTo(AppScreenRoute.progress),
         );
@@ -217,6 +222,12 @@ class _ScreenDispatcherState extends State<ScreenDispatcher> {
       case AppScreenRoute.coverEditor:
         return DesktopCoverEditorScreen(
           onBack: () => _navigateTo(AppScreenRoute.home),
+        );
+
+      case AppScreenRoute.mergeMedia:
+        return DesktopMergeMediaScreen(
+          onBack: () => _navigateTo(AppScreenRoute.home),
+          settingsService: widget.settingsService,
         );
 
       case AppScreenRoute.settings:
@@ -262,6 +273,7 @@ class _ScreenDispatcherState extends State<ScreenDispatcher> {
           batchService: widget.batchService,
           onCreateProject: _startNewProject,
           onOpenCoverEditor: () => _navigateTo(AppScreenRoute.coverEditor),
+          onOpenMergeMedia: () => _navigateTo(AppScreenRoute.mergeMedia),
           onOpenSettings: () => _navigateTo(AppScreenRoute.settings),
           onOpenProgress: () => _navigateTo(AppScreenRoute.progress),
         );
@@ -285,6 +297,12 @@ class _ScreenDispatcherState extends State<ScreenDispatcher> {
       case AppScreenRoute.coverEditor:
         return MobileCoverEditorScreen(
           onBack: () => _navigateTo(AppScreenRoute.home),
+        );
+
+      case AppScreenRoute.mergeMedia:
+        return MobileMergeMediaScreen(
+          onBack: () => _navigateTo(AppScreenRoute.home),
+          settingsService: widget.settingsService,
         );
 
       case AppScreenRoute.settings:
@@ -330,6 +348,7 @@ class _ScreenDispatcherState extends State<ScreenDispatcher> {
           batchService: widget.batchService,
           onCreateProject: _startNewProject,
           onOpenCoverEditor: () => _navigateTo(AppScreenRoute.coverEditor),
+          onOpenMergeMedia: () => _navigateTo(AppScreenRoute.mergeMedia),
           onOpenSettings: () => _navigateTo(AppScreenRoute.settings),
           onOpenProgress: () => _navigateTo(AppScreenRoute.progress),
         );
@@ -353,6 +372,12 @@ class _ScreenDispatcherState extends State<ScreenDispatcher> {
       case AppScreenRoute.coverEditor:
         return WebCoverEditorScreen(
           onBack: () => _navigateTo(AppScreenRoute.home),
+        );
+
+      case AppScreenRoute.mergeMedia:
+        return WebMergeMediaScreen(
+          onBack: () => _navigateTo(AppScreenRoute.home),
+          settingsService: widget.settingsService,
         );
 
       case AppScreenRoute.settings:
