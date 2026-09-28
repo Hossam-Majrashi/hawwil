@@ -6,6 +6,7 @@ import '../../models/conversion_settings.dart';
 import '../../services/batch_conversion_service.dart';
 import '../../services/settings_service.dart';
 import '../../widgets/thumbnail_preview.dart';
+import '../../widgets/item_smart_settings_bar.dart';
 
 class WebCreateProjectScreen extends StatefulWidget {
   final BatchConversionService batchService;
@@ -124,77 +125,102 @@ class _WebCreateProjectScreenState extends State<WebCreateProjectScreen> {
                                   final item = items[index];
 
                                   return Card(
-                                    child: ListTile(
-                                      leading: ThumbnailPreview(
-                                        bytes: item.thumbnailBytes,
-                                        size: 48,
-                                        placeholderIcon: (item.isAudioInput || item.hasVideoStream == false)
-                                            ? Icons.music_note_rounded
-                                            : Icons.videocam_rounded,
-                                        badgeText: item.fileExtension.toUpperCase(),
-                                        badgeColor: (item.isAudioInput || item.hasVideoStream == false)
-                                            ? Colors.blueAccent
-                                            : Colors.purpleAccent,
-                                      ),
-                                      title: Text(item.fileName, maxLines: 1),
-                                      subtitle: PopupMenuButton<String>(
-                                        tooltip: l10n.tr('targetFormat'),
-                                        initialValue: item.targetFormat,
-                                        onSelected: (val) {
-                                          widget.batchService.setTargetFormat(item, val);
-                                        },
-                                        itemBuilder: (context) {
-                                          if (item.isAudioInput) {
-                                            return ConversionItem.supportedVideoFormats.map(
-                                              (fmt) => PopupMenuItem(
-                                                value: fmt,
-                                                child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
-                                              ),
-                                            ).toList();
-                                          } else {
-                                            return [
-                                              ...ConversionItem.supportedAudioOutputFormats.map(
-                                                (fmt) => PopupMenuItem(
-                                                  value: fmt,
-                                                  child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
-                                                ),
-                                              ),
-                                              const PopupMenuDivider(),
-                                              ...ConversionItem.supportedVideoFormats.map(
-                                                (fmt) => PopupMenuItem(
-                                                  value: fmt,
-                                                  child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
-                                                ),
-                                              ),
-                                            ];
-                                          }
-                                        },
-                                        child: Padding(
-                                          padding: const EdgeInsets.only(top: 4.0),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                                        children: [
+                                          Row(
                                             children: [
-                                              Text(
-                                                '${item.fileExtension.toUpperCase()} ➔ ${item.targetFormat.toUpperCase()}',
-                                                style: TextStyle(
-                                                  color: item.isTargetAudio ? Colors.blue : Colors.purple,
-                                                  fontWeight: FontWeight.bold,
-                                                  fontSize: 11,
+                                              ThumbnailPreview(
+                                                bytes: item.thumbnailBytes,
+                                                size: 48,
+                                                placeholderIcon: (item.isAudioInput || item.hasVideoStream == false)
+                                                    ? Icons.music_note_rounded
+                                                    : Icons.videocam_rounded,
+                                                badgeText: item.fileExtension.toUpperCase(),
+                                                badgeColor: (item.isAudioInput || item.hasVideoStream == false)
+                                                    ? Colors.blueAccent
+                                                    : Colors.purpleAccent,
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(item.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                                    PopupMenuButton<String>(
+                                                      tooltip: l10n.tr('targetFormat'),
+                                                      initialValue: item.targetFormat,
+                                                      onSelected: (val) {
+                                                        widget.batchService.setTargetFormat(item, val);
+                                                      },
+                                                      itemBuilder: (context) {
+                                                        if (item.isAudioInput) {
+                                                          return ConversionItem.supportedVideoFormats.map(
+                                                            (fmt) => PopupMenuItem(
+                                                              value: fmt,
+                                                              child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
+                                                            ),
+                                                          ).toList();
+                                                        } else {
+                                                          return [
+                                                            ...ConversionItem.supportedAudioOutputFormats.map(
+                                                              (fmt) => PopupMenuItem(
+                                                                value: fmt,
+                                                                child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
+                                                              ),
+                                                            ),
+                                                            const PopupMenuDivider(),
+                                                            ...ConversionItem.supportedVideoFormats.map(
+                                                              (fmt) => PopupMenuItem(
+                                                                value: fmt,
+                                                                child: Text(l10n.tr('format${fmt[0].toUpperCase()}${fmt.substring(1)}')),
+                                                              ),
+                                                            ),
+                                                          ];
+                                                        }
+                                                      },
+                                                      child: Padding(
+                                                        padding: const EdgeInsets.only(top: 4.0),
+                                                        child: Row(
+                                                          mainAxisSize: MainAxisSize.min,
+                                                          children: [
+                                                            Text(
+                                                              '${item.fileExtension.toUpperCase()} ➔ ${item.targetFormat.toUpperCase()}',
+                                                              style: TextStyle(
+                                                                color: item.isTargetAudio ? Colors.blue : Colors.purple,
+                                                                fontWeight: FontWeight.bold,
+                                                                fontSize: 11,
+                                                              ),
+                                                            ),
+                                                            const SizedBox(width: 4),
+                                                            Icon(
+                                                              Icons.arrow_drop_down_rounded,
+                                                              size: 16,
+                                                              color: item.isTargetAudio ? Colors.blue : Colors.purple,
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
                                                 ),
                                               ),
-                                              const SizedBox(width: 4),
-                                              Icon(
-                                                Icons.arrow_drop_down_rounded,
-                                                size: 16,
-                                                color: item.isTargetAudio ? Colors.blue : Colors.purple,
+                                              IconButton(
+                                                icon: const Icon(Icons.close_rounded, size: 18),
+                                                onPressed: () => widget.batchService.removeItem(item.id),
                                               ),
                                             ],
                                           ),
-                                        ),
-                                      ),
-                                      trailing: IconButton(
-                                        icon: const Icon(Icons.close_rounded, size: 18),
-                                        onPressed: () => widget.batchService.removeItem(item.id),
+                                          if (item.isTargetVideo) ...[
+                                            const SizedBox(height: 8),
+                                            ItemSmartSettingsBar(
+                                              item: item,
+                                              batchService: widget.batchService,
+                                            ),
+                                          ],
+                                        ],
                                       ),
                                     ),
                                   );
@@ -252,7 +278,31 @@ class _WebCreateProjectScreenState extends State<WebCreateProjectScreen> {
                               );
                             }).toList(),
                             onChanged: (val) {
-                              if (val != null) setState(() => _projectSettings.defaultResolution = val);
+                              if (val != null) {
+                                setState(() => _projectSettings.defaultResolution = val);
+                                widget.batchService.setBatchResolution(val);
+                              }
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                          Text(l10n.tr('frameRate'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                          const SizedBox(height: 4),
+                          DropdownButtonFormField<String>(
+                            value: _projectSettings.defaultFps,
+                            items: ConversionSettings.availableFps.map((f) {
+                              return DropdownMenuItem(
+                                value: f,
+                                child: Text(f == 'auto' ? l10n.tr('fpsAuto') : '$f ${l10n.tr('fps')}'),
+                              );
+                            }).toList(),
+                            onChanged: (val) {
+                              if (val != null) {
+                                setState(() => _projectSettings.defaultFps = val);
+                                final parsed = double.tryParse(val);
+                                if (parsed != null) {
+                                  widget.batchService.setBatchFps(parsed);
+                                }
+                              }
                             },
                           ),
                           const SizedBox(height: 12),

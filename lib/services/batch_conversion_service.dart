@@ -45,8 +45,8 @@ class BatchConversionService extends ChangeNotifier {
   void addFiles(List<String> paths, {String? defaultVideoTarget}) {
     for (final path in paths) {
       final fileName = p.basename(path);
-      final ext = fileName.split('.').last.toLowerCase();
-      final isAudio = ConversionItem.supportedInputAudioExtensions.contains(ext) || ext == 'mp3';
+      final ext = ConversionItem.extractExtension(fileName);
+      final isAudio = ConversionItem.isAudioExtension(ext);
 
       final String target;
       if (isAudio) {
@@ -132,10 +132,42 @@ class BatchConversionService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setCustomImage(ConversionItem item, String imagePath, Uint8List bytes) {
+  void setItemResolution(ConversionItem item, String? resolution) {
+    item.resolutionOverride = resolution;
+    notifyListeners();
+  }
+
+  void setItemFps(ConversionItem item, double? fps) {
+    item.fpsOverride = fps;
+    notifyListeners();
+  }
+
+  void setBatchResolution(String resolution) {
+    for (final item in _items) {
+      item.resolutionOverride = resolution;
+    }
+    notifyListeners();
+  }
+
+  void setBatchFps(double fps) {
+    for (final item in _items) {
+      item.fpsOverride = fps;
+    }
+    notifyListeners();
+  }
+
+  Future<void> setCustomImage(ConversionItem item, String imagePath, Uint8List bytes) async {
     item.customImagePath = imagePath;
     item.thumbnailBytes = bytes;
+    item.fpsOverride ??= 2.0;
     notifyListeners();
+    final dims = await FFmpegService.probeImageDimensions(bytes, filePath: imagePath);
+    if (dims != null && dims.width > 0 && dims.height > 0) {
+      final evenW = dims.width.isEven ? dims.width : dims.width - 1;
+      final evenH = dims.height.isEven ? dims.height : dims.height - 1;
+      item.resolutionOverride = '${evenW}x$evenH';
+      notifyListeners();
+    }
   }
 
   void setVideoScrub(ConversionItem item, double seconds) {
@@ -156,11 +188,20 @@ class BatchConversionService extends ChangeNotifier {
 
     try {
       if (item.isAudioInput) {
+        // Suggested fps for static-image audio path is 1-2 fps
+        item.fpsOverride ??= 2.0;
+
         // Read embedded cover art
         final meta = await TagLibService.readMetadata(item.sourcePath);
-        if (meta.hasCover && meta.coverBytes != null) {
+        if (meta.hasCover && meta.coverBytes != null && meta.coverBytes!.isNotEmpty) {
           item.thumbnailBytes = meta.coverBytes;
           item.hasEmbeddedCover = true;
+          final dims = await FFmpegService.probeImageDimensions(meta.coverBytes);
+          if (dims != null && dims.width > 0 && dims.height > 0) {
+            final evenW = dims.width.isEven ? dims.width : dims.width - 1;
+            final evenH = dims.height.isEven ? dims.height : dims.height - 1;
+            item.resolutionOverride = '${evenW}x$evenH';
+          }
         }
         item.title = meta.title.isNotEmpty ? meta.title : p.basenameWithoutExtension(item.fileName);
         item.artist = meta.artist;
@@ -168,8 +209,40 @@ class BatchConversionService extends ChangeNotifier {
         if (meta.duration > Duration.zero) {
           item.durationSeconds = meta.duration.inMilliseconds / 1000.0;
         }
+
+        // If resolution is not resolved from cover, probe audio file for embedded stream or fallback
+        if (item.resolutionOverride == null) {
+          final probe = await FFmpegService.probeMedia(item.sourcePath);
+          if (probe.width != null && probe.height != null && probe.width! > 0 && probe.height! > 0) {
+            final evenW = probe.width!.isEven ? probe.width! : probe.width! - 1;
+            final evenH = probe.height!.isEven ? probe.height! : probe.height! - 1;
+            item.resolutionOverride = '${evenW}x$evenH';
+          } else {
+            item.resolutionOverride = '1920x1080';
+          }
+        }
       } else {
         // Video / general media input (MP4, MKV, WebM, AVI, MOV, FLV, WMV, RM, RAM, etc.):
+        final info = await FFmpegService.probeMedia(item.sourcePath);
+
+        // Smart suggestions from source video's own metadata
+        if (info.fps != null && info.fps! > 0) {
+          final f = info.fps!;
+          item.fpsOverride = (f == f.roundToDouble())
+              ? f.roundToDouble()
+              : double.parse(f.toStringAsFixed(2));
+        } else {
+          item.fpsOverride = 30.0;
+        }
+
+        if (info.width != null && info.height != null && info.width! > 0 && info.height! > 0) {
+          final evenW = info.width!.isEven ? info.width! : info.width! - 1;
+          final evenH = info.height!.isEven ? info.height! : info.height! - 1;
+          item.resolutionOverride = '${evenW}x$evenH';
+        } else {
+          item.resolutionOverride = '1920x1080';
+        }
+
         final frameBytes = await FFmpegService.extractVideoFrame(
           videoPath: item.sourcePath,
           timestampSeconds: 0.0,
@@ -178,13 +251,13 @@ class BatchConversionService extends ChangeNotifier {
           item.thumbnailBytes = frameBytes;
           item.hasVideoStream = true;
         } else {
-          item.hasVideoStream = await FFmpegService.hasVideoStream(item.sourcePath);
+          item.hasVideoStream = (info.width != null && info.height != null) || await FFmpegService.hasVideoStream(item.sourcePath);
         }
         final tags = await FFmpegService.readMediaTags(item.sourcePath);
         item.title = tags['title']?.isNotEmpty == true ? tags['title']! : p.basenameWithoutExtension(item.fileName);
         item.artist = tags['artist']?.isNotEmpty == true ? tags['artist']! : null;
         item.album = tags['album']?.isNotEmpty == true ? tags['album']! : null;
-        final dur = await FFmpegService.getMediaDuration(item.sourcePath);
+        final dur = info.durationSeconds ?? await FFmpegService.getMediaDuration(item.sourcePath);
         item.durationSeconds = dur;
       }
     } catch (e) {
@@ -326,8 +399,9 @@ class BatchConversionService extends ChangeNotifier {
               (settings.defaultResolution == 'original'
                   ? '1920x1080'
                   : settings.defaultResolution),
-          videoBitrate: item.videoBitrateOverride ?? settings.defaultVideoBitrate,
-          audioBitrate: item.audioBitrateOverride ?? settings.defaultAudioBitrate,
+          fps: item.fpsOverride,
+          videoBitrate: null, // Static-image path stays purely CRF-driven (no bitrate target)
+          audioBitrate: null, // Static-image path keeps VBR default (-q:a 2)
           hardwareAcceleration: settings.hardwareAcceleration,
           onProgress: (prog) {
             item.progress = prog;
@@ -412,6 +486,7 @@ class BatchConversionService extends ChangeNotifier {
               (settings.defaultResolution == 'original'
                   ? null
                   : settings.defaultResolution),
+          fps: item.fpsOverride,
           videoBitrate: item.videoBitrateOverride ?? settings.defaultVideoBitrate,
           audioBitrate: item.audioBitrateOverride ?? settings.defaultAudioBitrate,
           hardwareAcceleration: settings.hardwareAcceleration,
@@ -447,5 +522,20 @@ class BatchConversionService extends ChangeNotifier {
       0xFA, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
       0x82
     ]);
+  }
+
+  bool _isDisposed = false;
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    super.dispose();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_isDisposed) {
+      super.notifyListeners();
+    }
   }
 }

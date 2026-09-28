@@ -21,6 +21,7 @@ class MobileSettingsScreen extends StatefulWidget {
 
 class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
   late String _resolution;
+  late String _fps;
   late String _videoBitrate;
   late String _audioBitrate;
   String? _outputFolder;
@@ -30,6 +31,7 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
     super.initState();
     final cs = widget.settingsService.conversionSettings;
     _resolution = cs.defaultResolution;
+    _fps = cs.defaultFps;
     _videoBitrate = cs.defaultVideoBitrate;
     _audioBitrate = cs.defaultAudioBitrate;
     _outputFolder = cs.outputFolder;
@@ -38,6 +40,7 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
   void _saveSettings() {
     widget.settingsService.updateConversionSettings(
       defaultResolution: _resolution,
+      defaultFps: _fps,
       defaultVideoBitrate: _videoBitrate,
       defaultAudioBitrate: _audioBitrate,
       outputFolder: _outputFolder,
@@ -172,6 +175,25 @@ class _MobileSettingsScreenState extends State<MobileSettingsScreen> {
                       onChanged: (val) {
                         if (val != null) {
                           setState(() => _resolution = val);
+                          _saveSettings();
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+
+                    Text(l10n.tr('frameRate'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                    const SizedBox(height: 4),
+                    DropdownButtonFormField<String>(
+                      value: _fps,
+                      items: ConversionSettings.availableFps.map((f) {
+                        return DropdownMenuItem(
+                          value: f,
+                          child: Text(f == 'auto' ? l10n.tr('fpsAuto') : '$f ${l10n.tr('fps')}'),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() => _fps = val);
                           _saveSettings();
                         }
                       },

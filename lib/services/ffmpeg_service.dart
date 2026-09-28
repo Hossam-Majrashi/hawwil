@@ -616,6 +616,76 @@ class FFmpegService {
     return false;
   }
 
+  /// Extracts image width & height from bytes (or file) using binary header parsing,
+  /// with fallback to dart:ui instantiateImageCodec or ffprobe.
+  static Future<({int width, int height})?> probeImageDimensions(
+    Uint8List? bytes, {
+    String? filePath,
+  }) async {
+    if (bytes != null && bytes.length >= 24) {
+      // 1. Check PNG header (0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A)
+      if (bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47) {
+        final bd = ByteData.sublistView(bytes);
+        final w = bd.getUint32(16, Endian.big);
+        final h = bd.getUint32(20, Endian.big);
+        if (w > 0 && h > 0) return (width: w, height: h);
+      }
+
+      // 2. Check JPEG header (0xFF, 0xD8)
+      if (bytes[0] == 0xFF && bytes[1] == 0xD8) {
+        int offset = 2;
+        while (offset < bytes.length - 8) {
+          if (bytes[offset] != 0xFF) {
+            offset++;
+            continue;
+          }
+          final marker = bytes[offset + 1];
+          // SOF0 (0xC0), SOF1 (0xC1), SOF2 (0xC2) markers contain dimensions
+          if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2) {
+            final bd = ByteData.sublistView(bytes);
+            final h = bd.getUint16(offset + 5, Endian.big);
+            final w = bd.getUint16(offset + 7, Endian.big);
+            if (w > 0 && h > 0) return (width: w, height: h);
+            break;
+          } else if (marker == 0xDA || marker == 0xD9) {
+            break;
+          } else {
+            final bd = ByteData.sublistView(bytes);
+            if (offset + 3 < bytes.length) {
+              final len = bd.getUint16(offset + 2, Endian.big);
+              offset += 2 + len;
+            } else {
+              break;
+            }
+          }
+        }
+      }
+
+      // 3. Fallback to dart:ui instantiateImageCodec
+      try {
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frame = await codec.getNextFrame();
+        final w = frame.image.width;
+        final h = frame.image.height;
+        frame.image.dispose();
+        codec.dispose();
+        if (w > 0 && h > 0) return (width: w, height: h);
+      } catch (_) {}
+    }
+
+    // 4. Fallback to ffprobe if filePath is given
+    if (filePath != null && filePath.isNotEmpty && !kIsWeb) {
+      try {
+        final info = await probeMedia(filePath);
+        if (info.width != null && info.height != null && info.width! > 0 && info.height! > 0) {
+          return (width: info.width!, height: info.height!);
+        }
+      } catch (_) {}
+    }
+
+    return null;
+  }
+
   /// Probe media streams for resolution, bitrates, and duration
   static Future<MediaInfo> probeMedia(String filePath) async {
     if (kIsWeb) return const MediaInfo();
@@ -989,10 +1059,12 @@ class FFmpegService {
   }) async {
     final fmt = targetFormat.toLowerCase().replaceAll('.', '');
     final hw = await detectHardwareAcceleration();
-    final useNvenc = (hardwareAcceleration == 'auto' && hw.hasNvenc) || hardwareAcceleration == 'nvenc';
-    final useVaapi = (hardwareAcceleration == 'auto' && !hw.hasNvenc && hw.hasVaapi) || hardwareAcceleration == 'vaapi';
-    final useQsv = (hardwareAcceleration == 'auto' && !hw.hasNvenc && !hw.hasVaapi && hw.hasQsv) || hardwareAcceleration == 'qsv';
-    final useVideoToolbox = (hardwareAcceleration == 'auto' && !hw.hasNvenc && !hw.hasVaapi && !hw.hasQsv && hw.hasVideoToolbox && Platform.isMacOS) || hardwareAcceleration == 'videotoolbox';
+    // Static-image cover-to-video MUST stay software libx264 with -tune stillimage to allow
+    // P-frame skip blocks to push video bitrate down near-zero without hardware encoder bloat.
+    final useNvenc = !isStaticImage && ((hardwareAcceleration == 'auto' && hw.hasNvenc) || hardwareAcceleration == 'nvenc');
+    final useVaapi = !isStaticImage && ((hardwareAcceleration == 'auto' && !hw.hasNvenc && hw.hasVaapi) || hardwareAcceleration == 'vaapi');
+    final useQsv = !isStaticImage && ((hardwareAcceleration == 'auto' && !hw.hasNvenc && !hw.hasVaapi && hw.hasQsv) || hardwareAcceleration == 'qsv');
+    final useVideoToolbox = !isStaticImage && ((hardwareAcceleration == 'auto' && !hw.hasNvenc && !hw.hasVaapi && !hw.hasQsv && hw.hasVideoToolbox && Platform.isMacOS) || hardwareAcceleration == 'videotoolbox');
 
     final effectiveFps = (fps != null && fps > 0)
         ? fps
@@ -1001,7 +1073,7 @@ class FFmpegService {
     final gopStr = '$gopSize';
 
     int? requestedKbps;
-    if (videoBitrate != null && videoBitrate != 'auto' && videoBitrate.isNotEmpty) {
+    if (!isStaticImage && videoBitrate != null && videoBitrate != 'auto' && videoBitrate.isNotEmpty) {
       requestedKbps = int.tryParse(videoBitrate.replaceAll(RegExp(r'[^0-9]'), ''));
     }
 
@@ -1012,8 +1084,7 @@ class FFmpegService {
       case 'webm':
         final List<String> vArgs = [
           '-c:v', 'libvpx-vp9',
-          '-g', gopStr,
-          '-keyint_min', gopStr,
+          if (!isStaticImage) ...['-g', gopStr, '-keyint_min', gopStr],
           '-deadline', 'realtime',
           '-cpu-used', '8',
         ];
@@ -1021,7 +1092,7 @@ class FFmpegService {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
         } else {
           vArgs.addAll(['-b:v', '0', '-crf', '31']);
-          if (capStr != null) {
+          if (capStr != null && !isStaticImage) {
             vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
           }
         }
@@ -1041,14 +1112,13 @@ class FFmpegService {
         final List<String> vArgs = [
           '-c:v', 'mpeg4',
           '-vtag', 'XVID',
-          '-g', gopStr,
-          '-keyint_min', gopStr,
+          if (!isStaticImage) ...['-g', gopStr, '-keyint_min', gopStr],
         ];
         if (requestedKbps != null) {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
         } else {
           vArgs.addAll(['-q:v', '4']);
-          if (capStr != null) {
+          if (capStr != null && !isStaticImage) {
             vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
           }
         }
@@ -1067,14 +1137,13 @@ class FFmpegService {
       case 'wmv':
         final List<String> vArgs = [
           '-c:v', 'wmv2',
-          '-g', gopStr,
-          '-keyint_min', gopStr,
+          if (!isStaticImage) ...['-g', gopStr, '-keyint_min', gopStr],
         ];
         if (requestedKbps != null) {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
         } else {
           vArgs.addAll(['-q:v', '4']);
-          if (capStr != null) {
+          if (capStr != null && !isStaticImage) {
             vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
           }
         }
@@ -1096,14 +1165,13 @@ class FFmpegService {
           '-preset', 'ultrafast',
           if (isStaticImage) ...['-tune', 'stillimage'],
           '-threads', '0',
-          '-g', gopStr,
-          '-keyint_min', gopStr,
+          if (!isStaticImage) ...['-g', gopStr, '-keyint_min', gopStr],
         ];
         if (requestedKbps != null) {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
         } else {
           vArgs.addAll(['-crf', '23']);
-          if (capStr != null) {
+          if (capStr != null && !isStaticImage) {
             vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
           }
         }
@@ -1122,8 +1190,7 @@ class FFmpegService {
       case 'ogv':
         final List<String> vArgs = [
           '-c:v', 'libtheora',
-          '-g', gopStr,
-          '-keyint_min', gopStr,
+          if (!isStaticImage) ...['-g', gopStr, '-keyint_min', gopStr],
         ];
         if (requestedKbps != null) {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
@@ -1146,14 +1213,13 @@ class FFmpegService {
       case 'mpeg':
         final List<String> vArgs = [
           '-c:v', 'mpeg2video',
-          '-g', gopStr,
-          '-keyint_min', gopStr,
+          if (!isStaticImage) ...['-g', gopStr, '-keyint_min', gopStr],
         ];
         if (requestedKbps != null) {
           vArgs.addAll(['-b:v', '${requestedKbps}k']);
         } else {
           vArgs.addAll(['-q:v', '4']);
-          if (capStr != null) {
+          if (capStr != null && !isStaticImage) {
             vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
           }
         }
@@ -1259,14 +1325,13 @@ class FFmpegService {
             '-preset', 'ultrafast',
             if (isStaticImage) ...['-tune', 'stillimage'],
             '-threads', '0',
-            '-g', gopStr,
-            '-keyint_min', gopStr,
+            if (!isStaticImage) ...['-g', gopStr, '-keyint_min', gopStr],
           ]);
           if (requestedKbps != null) {
             vArgs.addAll(['-b:v', '${requestedKbps}k']);
           } else {
             vArgs.addAll(['-crf', '23']);
-            if (capStr != null) {
+            if (capStr != null && !isStaticImage) {
               vArgs.addAll(['-maxrate', capStr, '-bufsize', bufStr!]);
             }
           }
@@ -1297,6 +1362,7 @@ class FFmpegService {
     required String outputPath,
     String targetFormat = 'mp4',
     String? resolution,
+    double? fps,
     String? videoBitrate,
     String? audioBitrate,
     String hardwareAcceleration = 'auto',
@@ -1329,23 +1395,36 @@ class FFmpegService {
         finalRes = '1920x1080';
       }
     } else {
-      finalRes = resolution;
+      final parts = resolution.split('x');
+      if (parts.length == 2) {
+        final w = int.tryParse(parts[0]);
+        final h = int.tryParse(parts[1]);
+        if (w != null && h != null && w > 0 && h > 0) {
+          final evenW = w.isEven ? w : w - 1;
+          final evenH = h.isEven ? h : h - 1;
+          finalRes = '${evenW}x$evenH';
+        } else {
+          finalRes = resolution;
+        }
+      } else {
+        finalRes = resolution;
+      }
     }
 
-    String? explicitAudioBitrate;
-    if (audioBitrate != null && audioBitrate != 'auto' && audioBitrate.isNotEmpty) {
-      explicitAudioBitrate = audioBitrate;
-    }
+    final effectiveFps = (fps != null && fps > 0) ? fps : 2.0;
+    final fpsStr = (effectiveFps == effectiveFps.roundToDouble())
+        ? effectiveFps.toInt().toString()
+        : effectiveFps.toStringAsFixed(2);
 
     final codecConfig = await getCodecConfigForFormat(
       targetFormat: targetFormat,
-      videoBitrate: videoBitrate,
-      audioBitrate: explicitAudioBitrate,
+      videoBitrate: null, // Static-image path must stay purely CRF-driven (no bitrate target)
+      audioBitrate: null, // Static-image path keeps VBR default (-q:a 2 / codec-equivalent)
       audioSampleRate: audioInfo.audioSampleRate,
       audioChannels: audioInfo.audioChannels,
       hardwareAcceleration: hardwareAcceleration,
       isStaticImage: true,
-      fps: 2.0,
+      fps: effectiveFps,
       maxRateKbps: null,
     );
 
@@ -1354,11 +1433,12 @@ class FFmpegService {
         '-y',
         '-threads', '0',
         '-loop', '1',
-        '-framerate', '2', // Smart low framerate for static cover image: 1000x faster!
+        '-framerate', fpsStr, // Smart low framerate for static cover image: 1000x faster!
         '-i', imagePath,
         '-i', audioPath,
         '-map', '0:v:0',
         '-map', '1:a:0?',
+        '-vf', 'scale=out_range=tv,format=yuv420p',
         ...codecConfig.extraArgs,
         ...codecConfig.videoEncoderArgs,
         ...codecConfig.audioEncoderArgs,
@@ -1366,7 +1446,8 @@ class FFmpegService {
         if (artist != null && artist.isNotEmpty) ...['-metadata', 'artist=$artist'],
         if (album != null && album.isNotEmpty) ...['-metadata', 'album=$album'],
         '-s', finalRes,
-        '-r', '2',
+        '-pix_fmt', 'yuv420p',
+        '-r', fpsStr,
         '-shortest',
         outputPath,
       ];
@@ -1383,11 +1464,12 @@ class FFmpegService {
         '-y',
         '-threads', '0',
         '-loop', '1',
-        '-framerate', '2',
+        '-framerate', fpsStr,
         '-i', '"$imagePath"',
         '-i', '"$audioPath"',
         '-map', '0:v:0',
         '-map', '1:a:0?',
+        '-vf "scale=out_range=tv,format=yuv420p"',
         ...codecConfig.extraArgs,
         ...codecConfig.videoEncoderArgs,
         ...codecConfig.audioEncoderArgs,
@@ -1395,7 +1477,8 @@ class FFmpegService {
         if (artist != null && artist.isNotEmpty) '-metadata "artist=$artist"',
         if (album != null && album.isNotEmpty) '-metadata "album=$album"',
         '-s', finalRes,
-        '-r', '2',
+        '-pix_fmt yuv420p',
+        '-r', fpsStr,
         '-shortest',
         '"$outputPath"',
       ].join(' ');
@@ -1416,6 +1499,7 @@ class FFmpegService {
     required String imagePath,
     required String outputPath,
     String? resolution,
+    double? fps,
     String? videoBitrate,
     String? audioBitrate,
     String hardwareAcceleration = 'auto',
@@ -1428,6 +1512,7 @@ class FFmpegService {
       outputPath: outputPath,
       targetFormat: 'mp4',
       resolution: resolution,
+      fps: fps,
       videoBitrate: videoBitrate,
       audioBitrate: audioBitrate,
       hardwareAcceleration: hardwareAcceleration,
@@ -1442,6 +1527,7 @@ class FFmpegService {
     required String outputPath,
     required String targetFormat,
     String? resolution,
+    double? fps,
     String? videoBitrate,
     String? audioBitrate,
     String hardwareAcceleration = 'auto',
@@ -1507,6 +1593,16 @@ class FFmpegService {
       }
     }
 
+    final effectiveFps = (fps != null && fps > 0) ? fps : sourceInfo.fps;
+    final String? fpsStr;
+    if (fps != null && fps > 0) {
+      fpsStr = (fps == fps.roundToDouble())
+          ? fps.toInt().toString()
+          : fps.toStringAsFixed(2);
+    } else {
+      fpsStr = null;
+    }
+
     final codecConfig = await getCodecConfigForFormat(
       targetFormat: targetFormat,
       videoBitrate: videoBitrate,
@@ -1515,7 +1611,7 @@ class FFmpegService {
       audioChannels: sourceInfo.audioChannels,
       hardwareAcceleration: hardwareAcceleration,
       isStaticImage: false,
-      fps: sourceInfo.fps,
+      fps: effectiveFps,
       maxRateKbps: maxRateKbps,
     );
 
@@ -1530,6 +1626,7 @@ class FFmpegService {
         ...codecConfig.videoEncoderArgs,
         ...codecConfig.audioEncoderArgs,
         if (scaleResolution != null) ...['-s', scaleResolution],
+        if (fpsStr != null) ...['-r', fpsStr],
         outputPath,
       ];
 
@@ -1551,6 +1648,7 @@ class FFmpegService {
         ...codecConfig.videoEncoderArgs,
         ...codecConfig.audioEncoderArgs,
         if (scaleResolution != null) '-s $scaleResolution',
+        if (fpsStr != null) '-r $fpsStr',
         '"$outputPath"',
       ].join(' ');
 
@@ -2091,6 +2189,9 @@ class FFmpegService {
     Completer<void>? cancelCompleter,
   }) async {
     try {
+      final cmdStr = 'ffmpeg ${args.map((a) => a.contains(' ') || a.contains(';') || a.contains('[') ? '"$a"' : a).join(' ')}';
+      debugPrint('[FFmpeg Desktop Execution] $cmdStr');
+
       final process = await Process.start('ffmpeg', args);
 
       bool isCancelled = false;
@@ -2175,6 +2276,7 @@ class FFmpegService {
     Completer<void>? cancelCompleter,
   }) async {
     try {
+      debugPrint('[FFmpeg Mobile Execution] ffmpeg $command');
       final sessionCompleter = Completer<FFmpegResult>();
 
       final session = await FFmpegKit.executeAsync(

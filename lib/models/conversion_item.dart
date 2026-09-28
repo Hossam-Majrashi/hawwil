@@ -132,6 +132,7 @@ class ConversionItem {
 
   // Item overrides
   String? resolutionOverride;
+  double? fpsOverride;
   String? videoBitrateOverride;
   String? audioBitrateOverride;
 
@@ -155,14 +156,33 @@ class ConversionItem {
     this.artist,
     this.album,
     this.resolutionOverride,
+    this.fpsOverride,
     this.videoBitrateOverride,
     this.audioBitrateOverride,
   }) : targetFormat = targetFormat ??
             _resolveInitialTarget(fileName, direction);
 
+  static bool isAudioExtension(String ext) {
+    final clean = ext.toLowerCase().replaceAll('.', '');
+    return supportedInputAudioExtensions.contains(clean);
+  }
+
+  static bool isVideoExtension(String ext) {
+    final clean = ext.toLowerCase().replaceAll('.', '');
+    return supportedInputVideoExtensions.contains(clean);
+  }
+
+  static String extractExtension(String name) {
+    final dotIndex = name.lastIndexOf('.');
+    if (dotIndex != -1 && dotIndex < name.length - 1) {
+      return name.substring(dotIndex + 1).toLowerCase();
+    }
+    return '';
+  }
+
   static String _resolveInitialTarget(String fileName, ConversionDirection? direction) {
-    final ext = _extractExtension(fileName);
-    final isAudio = supportedInputAudioExtensions.contains(ext) || ext == 'mp3';
+    final ext = extractExtension(fileName);
+    final isAudio = isAudioExtension(ext);
     if (isAudio) {
       return 'mp4';
     }
@@ -177,19 +197,9 @@ class ConversionItem {
     return ext == 'mp4' ? 'mp3' : 'mp4';
   }
 
-  static String _extractExtension(String name) {
-    final dotIndex = name.lastIndexOf('.');
-    if (dotIndex != -1 && dotIndex < name.length - 1) {
-      return name.substring(dotIndex + 1).toLowerCase();
-    }
-    return '';
-  }
+  String get fileExtension => extractExtension(fileName);
 
-  String get fileExtension => _extractExtension(fileName);
-
-  bool get isAudioInput =>
-      supportedInputAudioExtensions.contains(fileExtension) ||
-      fileExtension == 'mp3';
+  bool get isAudioInput => isAudioExtension(fileExtension);
 
   bool get isVideoInput => !isAudioInput;
 

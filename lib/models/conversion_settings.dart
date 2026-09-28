@@ -66,7 +66,18 @@ class ConversionSettings {
     'opus',
   ];
 
+  static const List<String> availableFps = [
+    'auto',
+    '60',
+    '30',
+    '25',
+    '24',
+    '2',
+    '1',
+  ];
+
   String defaultResolution;
+  String defaultFps;
   String defaultVideoBitrate;
   String defaultAudioBitrate;
   String hardwareAcceleration;
@@ -76,6 +87,7 @@ class ConversionSettings {
 
   ConversionSettings({
     this.defaultResolution = 'original',
+    this.defaultFps = 'auto',
     this.defaultVideoBitrate = 'auto',
     this.defaultAudioBitrate = 'auto',
     this.hardwareAcceleration = 'auto',
@@ -86,6 +98,7 @@ class ConversionSettings {
 
   ConversionSettings copyWith({
     String? defaultResolution,
+    String? defaultFps,
     String? defaultVideoBitrate,
     String? defaultAudioBitrate,
     String? hardwareAcceleration,
@@ -95,6 +108,7 @@ class ConversionSettings {
   }) {
     return ConversionSettings(
       defaultResolution: defaultResolution ?? this.defaultResolution,
+      defaultFps: defaultFps ?? this.defaultFps,
       defaultVideoBitrate: defaultVideoBitrate ?? this.defaultVideoBitrate,
       defaultAudioBitrate: defaultAudioBitrate ?? this.defaultAudioBitrate,
       hardwareAcceleration: hardwareAcceleration ?? this.hardwareAcceleration,

@@ -1120,31 +1120,30 @@ Error opening input files: Invalid data found when processing input
     });
 
     test('getCodecConfigForFormat calculates GOP and keyint_min based on real-time 2s across framerates', () async {
-      // 1. Static image path (2 fps) -> GOP of 4
+      // 1. Static image path stays purely CRF-driven with -tune stillimage and omits -g to allow skip-blocks
       final staticConfig = await FFmpegService.getCodecConfigForFormat(
         targetFormat: 'mp4',
         hardwareAcceleration: 'cpu_ultrafast',
         isStaticImage: true,
         fps: 2.0,
       );
-      expect(staticConfig.videoEncoderArgs, contains('-g'));
-      final gIndexStatic = staticConfig.videoEncoderArgs.indexOf('-g');
-      expect(staticConfig.videoEncoderArgs[gIndexStatic + 1], equals('4'));
-      expect(staticConfig.videoEncoderArgs, contains('-keyint_min'));
-      final kIndexStatic = staticConfig.videoEncoderArgs.indexOf('-keyint_min');
-      expect(staticConfig.videoEncoderArgs[kIndexStatic + 1], equals('4'));
+      expect(staticConfig.videoEncoderArgs, contains('-tune'));
+      expect(staticConfig.videoEncoderArgs, contains('stillimage'));
+      expect(staticConfig.videoEncoderArgs, contains('-crf'));
+      expect(staticConfig.videoEncoderArgs, contains('23'));
+      expect(staticConfig.videoEncoderArgs, isNot(contains('-g')));
+      expect(staticConfig.videoEncoderArgs, isNot(contains('-keyint_min')));
       expect(staticConfig.extraArgs, contains('-movflags'));
       expect(staticConfig.extraArgs, contains('+faststart'));
 
-      // 2. Static image path at 1 fps -> GOP of 2
+      // 2. Static image path at 1 fps also omits -g
       final static1FpsConfig = await FFmpegService.getCodecConfigForFormat(
         targetFormat: 'mp4',
         hardwareAcceleration: 'cpu_ultrafast',
         isStaticImage: true,
         fps: 1.0,
       );
-      final gIndex1 = static1FpsConfig.videoEncoderArgs.indexOf('-g');
-      expect(static1FpsConfig.videoEncoderArgs[gIndex1 + 1], equals('2'));
+      expect(static1FpsConfig.videoEncoderArgs, isNot(contains('-g')));
 
       // 3. Normal video at 24 fps -> GOP of 48
       final filmConfig = await FFmpegService.getCodecConfigForFormat(
@@ -1265,18 +1264,18 @@ Error opening input files: Invalid data found when processing input
       expect(staticRes.success, isTrue);
       expect(await File(staticOut).exists(), isTrue);
 
-      // Verify keyframe interval in static-image output: keyframe every 4 frames (at 2 fps = 2.0s)
+      // Verify keyframe and pixel format in static-image output:
       final probeStatic = await Process.run('ffprobe', [
         '-v', 'error',
         '-select_streams', 'v',
-        '-show_entries', 'frame=key_frame',
-        '-of', 'default=noprint_wrappers=1:nokey=1',
+        '-show_entries', 'stream=pix_fmt:frame=key_frame',
+        '-of', 'default=noprint_wrappers=1',
         staticOut,
       ]);
-      final staticFrames = probeStatic.stdout.toString().trim().split('\n').where((s) => s.isNotEmpty).toList();
-      // At 2 fps for 10 seconds, there are ~20 frames; with GOP=4, frames 0, 4, 8, 12, 16 are keyframes
-      int keyframeCount = staticFrames.where((f) => f == '1').length;
-      expect(keyframeCount, greaterThanOrEqualTo(5)); // ~1 keyframe every 2 seconds
+      expect(probeStatic.stdout.toString(), contains('pix_fmt=yuv420p'));
+      final staticFrames = probeStatic.stdout.toString().trim().split('\n').where((s) => s.startsWith('key_frame=')).toList();
+      int keyframeCount = staticFrames.where((f) => f == 'key_frame=1').length;
+      expect(keyframeCount, greaterThanOrEqualTo(1)); // First frame is keyframe, subsequent are skip P-frames
 
       // Verify fast seek times in static-image output at random points (e.g. 2.5s, 5.0s, 7.5s)
       for (final seekSec in ['2.5', '5.0', '7.5']) {

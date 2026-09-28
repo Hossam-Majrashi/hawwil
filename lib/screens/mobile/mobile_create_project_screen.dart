@@ -8,6 +8,7 @@ import '../../services/batch_conversion_service.dart';
 import '../../services/settings_service.dart';
 import '../../services/ffmpeg_service.dart';
 import '../../widgets/thumbnail_preview.dart';
+import '../../widgets/item_smart_settings_bar.dart';
 
 class MobileCreateProjectScreen extends StatefulWidget {
   final BatchConversionService batchService;
@@ -180,6 +181,74 @@ class _MobileCreateProjectScreenState extends State<MobileCreateProjectScreen> {
                   }
                 },
               ),
+              const SizedBox(height: 6),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    minimumSize: const Size(0, 32),
+                  ),
+                  onPressed: () {
+                    widget.batchService.setBatchResolution(_projectSettings.defaultResolution);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          '${l10n.tr('applyResolutionToAll')}: ${_projectSettings.defaultResolution}',
+                        ),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.aspect_ratio_rounded, size: 15),
+                  label: Text(l10n.tr('applyResolutionToAll'), style: const TextStyle(fontSize: 11)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Frame Rate (FPS)
+              Text(l10n.tr('frameRate'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              const SizedBox(height: 4),
+              DropdownButtonFormField<String>(
+                value: _projectSettings.defaultFps,
+                items: ConversionSettings.availableFps.map((f) {
+                  return DropdownMenuItem(
+                    value: f,
+                    child: Text(f == 'auto' ? l10n.tr('fpsAuto') : '$f ${l10n.tr('fps')}'),
+                  );
+                }).toList(),
+                onChanged: (val) {
+                  if (val != null) {
+                    setModalState(() => _projectSettings.defaultFps = val);
+                    setState(() {});
+                  }
+                },
+              ),
+              const SizedBox(height: 6),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    minimumSize: const Size(0, 32),
+                  ),
+                  onPressed: () {
+                    final parsed = double.tryParse(_projectSettings.defaultFps);
+                    if (parsed != null) {
+                      widget.batchService.setBatchFps(parsed);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            '${l10n.tr('applyFpsToAll')}: $parsed ${l10n.tr('fps')}',
+                          ),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.speed_rounded, size: 15),
+                  label: Text(l10n.tr('applyFpsToAll'), style: const TextStyle(fontSize: 11)),
+                ),
+              ),
               const SizedBox(height: 12),
               // Video Bitrate
               Text(l10n.tr('videoBitrate'), style: const TextStyle(fontSize: 12, color: Colors.grey)),
@@ -235,6 +304,10 @@ class _MobileCreateProjectScreenState extends State<MobileCreateProjectScreen> {
     final titleCtrl = TextEditingController(text: item.title ?? '');
     final artistCtrl = TextEditingController(text: item.artist ?? '');
     final albumCtrl = TextEditingController(text: item.album ?? '');
+    final resCtrl = TextEditingController(text: item.resolutionOverride ?? '');
+    final fpsCtrl = TextEditingController(
+      text: item.fpsOverride != null ? ItemSmartSettingsBar.formatFps(item.fpsOverride!) : '',
+    );
 
     showModalBottomSheet(
       context: context,
@@ -272,6 +345,34 @@ class _MobileCreateProjectScreenState extends State<MobileCreateProjectScreen> {
               controller: albumCtrl,
               decoration: InputDecoration(labelText: l10n.tr('album')),
             ),
+            if (item.isTargetVideo) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: resCtrl,
+                      decoration: InputDecoration(
+                        labelText: l10n.tr('resolution'),
+                        hintText: '1920x1080',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: fpsCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        labelText: l10n.tr('frameRate'),
+                        hintText: '30',
+                        suffixText: l10n.tr('fps'),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 20),
             ElevatedButton(
               onPressed: () {
@@ -281,6 +382,16 @@ class _MobileCreateProjectScreenState extends State<MobileCreateProjectScreen> {
                   artist: artistCtrl.text.trim(),
                   album: albumCtrl.text.trim(),
                 );
+                if (item.isTargetVideo) {
+                  final r = resCtrl.text.trim();
+                  if (r.isNotEmpty) {
+                    widget.batchService.setItemResolution(item, r);
+                  }
+                  final f = double.tryParse(fpsCtrl.text.trim());
+                  if (f != null && f > 0) {
+                    widget.batchService.setItemFps(item, f);
+                  }
+                }
                 Navigator.pop(ctx);
               },
               child: Text(l10n.tr('save')),
@@ -529,6 +640,14 @@ class _MobileCreateProjectScreenState extends State<MobileCreateProjectScreen> {
                                       ),
                                     ],
                                   ),
+                                if (item.isTargetVideo) ...[
+                                  const SizedBox(height: 8),
+                                  ItemSmartSettingsBar(
+                                    item: item,
+                                    batchService: widget.batchService,
+                                    isCompact: true,
+                                  ),
+                                ],
                               ],
                             ),
                           ),

@@ -22,6 +22,7 @@ class DesktopSettingsScreen extends StatefulWidget {
 
 class _DesktopSettingsScreenState extends State<DesktopSettingsScreen> {
   late String _resolution;
+  late String _fps;
   late String _videoBitrate;
   late String _audioBitrate;
   late String _hardwareAcceleration;
@@ -34,6 +35,7 @@ class _DesktopSettingsScreenState extends State<DesktopSettingsScreen> {
     super.initState();
     final cs = widget.settingsService.conversionSettings;
     _resolution = cs.defaultResolution;
+    _fps = cs.defaultFps;
     _videoBitrate = cs.defaultVideoBitrate;
     _audioBitrate = cs.defaultAudioBitrate;
     _hardwareAcceleration = cs.hardwareAcceleration;
@@ -58,6 +60,7 @@ class _DesktopSettingsScreenState extends State<DesktopSettingsScreen> {
   void _saveSettings() {
     widget.settingsService.updateConversionSettings(
       defaultResolution: _resolution,
+      defaultFps: _fps,
       defaultVideoBitrate: _videoBitrate,
       defaultAudioBitrate: _audioBitrate,
       hardwareAcceleration: _hardwareAcceleration,
@@ -311,6 +314,29 @@ class _DesktopSettingsScreenState extends State<DesktopSettingsScreen> {
                         onChanged: (val) {
                           if (val != null) {
                             setState(() => _resolution = val);
+                            _saveSettings();
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Frame Rate (FPS)
+                      Text(
+                        l10n.tr('frameRate'),
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<String>(
+                        value: _fps,
+                        items: ConversionSettings.availableFps.map((f) {
+                          return DropdownMenuItem(
+                            value: f,
+                            child: Text(f == 'auto' ? l10n.tr('fpsAuto') : '$f ${l10n.tr('fps')}'),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setState(() => _fps = val);
                             _saveSettings();
                           }
                         },

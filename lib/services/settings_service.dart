@@ -7,6 +7,7 @@ class SettingsService extends ChangeNotifier {
   static const String _keyThemeMode = 'hawwil_theme_mode';
   static const String _keyFirstRun = 'hawwil_first_run_completed';
   static const String _keyResolution = 'hawwil_resolution';
+  static const String _keyFps = 'hawwil_fps';
   static const String _keyVideoBitrate = 'hawwil_video_bitrate';
   static const String _keyAudioBitrate = 'hawwil_audio_bitrate';
   static const String _keyHardwareAcceleration = 'hawwil_hwaccel';
@@ -47,6 +48,7 @@ class SettingsService extends ChangeNotifier {
 
     _conversionSettings = ConversionSettings(
       defaultResolution: _prefs.getString(_keyResolution) ?? 'original',
+      defaultFps: _prefs.getString(_keyFps) ?? 'auto',
       defaultVideoBitrate: _prefs.getString(_keyVideoBitrate) ?? 'auto',
       defaultAudioBitrate: _prefs.getString(_keyAudioBitrate) ?? 'auto',
       hardwareAcceleration: _prefs.getString(_keyHardwareAcceleration) ?? 'auto',
@@ -85,6 +87,7 @@ class SettingsService extends ChangeNotifier {
 
   Future<void> updateConversionSettings({
     String? defaultResolution,
+    String? defaultFps,
     String? defaultVideoBitrate,
     String? defaultAudioBitrate,
     String? hardwareAcceleration,
@@ -94,6 +97,7 @@ class SettingsService extends ChangeNotifier {
   }) async {
     _conversionSettings = _conversionSettings.copyWith(
       defaultResolution: defaultResolution,
+      defaultFps: defaultFps,
       defaultVideoBitrate: defaultVideoBitrate,
       defaultAudioBitrate: defaultAudioBitrate,
       hardwareAcceleration: hardwareAcceleration,
@@ -104,6 +108,9 @@ class SettingsService extends ChangeNotifier {
 
     if (defaultResolution != null) {
       await _prefs.setString(_keyResolution, defaultResolution);
+    }
+    if (defaultFps != null) {
+      await _prefs.setString(_keyFps, defaultFps);
     }
     if (defaultVideoBitrate != null) {
       await _prefs.setString(_keyVideoBitrate, defaultVideoBitrate);
